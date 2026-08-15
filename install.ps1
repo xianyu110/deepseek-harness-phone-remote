@@ -13,22 +13,46 @@ Write-Host "  DeepSeek Harness Phone Remote - One-Click Deploy" -ForegroundColor
 Write-Host "======================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ---------- 1. basic checks ----------
+# ---------- 1. basic checks (auto-install what is missing) ----------
+$winget = Get-Command winget -ErrorAction SilentlyContinue
+
 $node = "C:\Program Files\nodejs\node.exe"
 if (-not (Test-Path $node)) {
-    Write-Host "[X] Node.js not found. Install from https://nodejs.org" -ForegroundColor Red
-    exit 1
+    if ($winget) {
+        Write-Host "[...] Node.js not found - installing via winget (if a UAC prompt appears, click Yes)..." -ForegroundColor Yellow
+        & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Host
+        Start-Sleep -Seconds 3
+        $node = "C:\Program Files\nodejs\node.exe"
+    }
+    if (-not (Test-Path $node)) {
+        Write-Host "[X] Node.js still missing. Install it from https://nodejs.org , then re-run this script." -ForegroundColor Red
+        exit 1
+    }
 }
 Write-Host "[OK] Node.js found"
 
+# Tailscale: auto-install via winget when missing, then guide the one-time sign-in.
 $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
 if (-not $tsSvc -or $tsSvc.Status -ne "Running") {
-    Write-Host "[X] Tailscale service is not running. Install and sign in: https://tailscale.com/download" -ForegroundColor Red
-    exit 1
+    if ($winget) {
+        Write-Host "[...] Tailscale not installed - installing via winget (if a UAC prompt appears, click Yes)..." -ForegroundColor Yellow
+        & winget install --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Host
+        Start-Sleep -Seconds 5
+        $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+        if ($tsSvc -and $tsSvc.Status -ne "Running") {
+            Write-Host "[...] Starting the Tailscale service..."
+            Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+        }
+    }
+    if (-not (Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue)) {
+        Write-Host "[X] Tailscale could not be installed automatically. Install it from https://tailscale.com/download , then re-run this script." -ForegroundColor Red
+        exit 1
+    }
 }
 Write-Host "[OK] Tailscale service running"
 
-# ---------- 2. read Tailscale identity ----------
+# ---------- 2. read Tailscale identity (guide the one-time sign-in) ----------
 $tsCli = "C:\Program Files\Tailscale\tailscale.exe"
 $tsIP = ""
 $tsName = ""
@@ -41,8 +65,25 @@ try {
     }
 } catch { }
 if (-not $tsIP) {
-    Write-Host "[!] Could not read the Tailscale IP (may need admin rights)." -ForegroundColor Yellow
-    $tsIP = Read-Host "    Enter this PC's Tailscale IP manually (e.g. 100.x.y.z)"
+    Write-Host ""
+    Write-Host "===============================================================" -ForegroundColor Cyan
+    Write-Host "  Tailscale needs a one-time sign-in (your own account)." -ForegroundColor Cyan
+    Write-Host "  This step is always manual by design - nobody can do it for you." -ForegroundColor Cyan
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host "  1) A browser page will open. Log in or register a free" -ForegroundColor White
+    Write-Host "     Tailscale account (https://tailscale.com)." -ForegroundColor White
+    Write-Host "  2) Then install the Tailscale app on your PHONE and log in" -ForegroundColor White
+    Write-Host "     with the SAME account (App Store / Play Store: 'Tailscale')." -ForegroundColor White
+    Write-Host "  3) Both devices must show as Connected." -ForegroundColor White
+    Write-Host "===============================================================" -ForegroundColor Cyan
+    Write-Host ""
+    try { Start-Process "https://login.tailscale.com/start" } catch { }
+    Read-Host "  Press ENTER after you have signed in on this PC"
+    try { $tsIP = (& $tsCli ip -4 2>$null | Select-Object -First 1).Trim() } catch { }
+}
+if (-not $tsIP) {
+    Write-Host "[!] Still no Tailscale IP. Enter it manually (look in the Tailscale app):" -ForegroundColor Yellow
+    $tsIP = Read-Host "    Tailscale IP (e.g. 100.x.y.z)"
 }
 if (-not $tsName) { $tsName = $env:COMPUTERNAME + ".tailnet.ts.net" }
 Write-Host "[OK] Tailscale IP: $tsIP"

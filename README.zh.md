@@ -4,7 +4,7 @@
 
 通过 **Tailscale** 用手机安全地远程访问 PC 上的 DeepSeek Harness Web GUI,并内置一个**持久化文件/工作区插件**:手机上可以直接浏览、查看、编辑 PC 文件,以及在任何文件夹开始新的会话(解决手机端无法弹系统目录选择框的问题)。
 
-> 部署包:一键部署(`一键部署.cmd`)→ 自动探测 Tailscale 信息 → 生成启动脚本 → 开启 Tailscale Serve(HTTPS)→ 安装持久插件 → 打印手机访问地址。
+> 部署包:一键部署(`一键部署.cmd`),基于 **Tailscale** → 自动安装缺失的 Node.js / Tailscale(winget,弹 UAC 点"是")→ 引导你完成一次性的 Tailscale 账号登录(唯一手动步骤)→ 自动探测 Tailscale 信息 → 生成启动脚本 → 开启 Tailscale Serve(HTTPS)→ 安装持久插件 → 打印手机访问地址。
 
 ## 为什么需要它
 
@@ -14,7 +14,7 @@
 
 ## 功能
 
-- **一键部署**:`install.ps1` 自动探测 Tailscale IP/域名、写入 `start_harness.ps1`、启用 `tailscale serve`、安装持久插件;
+- **一键部署(自动装依赖)**:`install.ps1` 自动安装缺失的 **Node.js** 和 **Tailscale**(winget,弹 UAC 点"是"),引导一次性 Tailscale 登录,然后自动探测 IP/域名、写入 `start_harness.ps1`、启用 `tailscale serve`、安装持久插件;
 - **开机自启**:每次登录自动拉起 Harness + 转发器 + 防睡眠;
 - **持久化插件**:`remfs-persistent` 以 loader 条目常驻,host 通道 `/remfs` 随 Harness 启动注册,客户端模块随页面加载——刷新无需重新运行;
 - **双语界面**:英文 / 中文(自动跟随浏览器语言,工作台头部可切换,记忆选择)。
@@ -69,8 +69,9 @@ PC(仅监听本机 + tailnet,不监听 0.0.0.0)
 
 | 项目 | 说明 |
 |---|---|
-| Windows + Node.js ≥ 18 | 运行 `dsh web` |
-| Tailscale | 手机与 PC 登录同一账号,见 [tailscale.com/download](https://tailscale.com/download) |
+| Windows 10/11 | 64 位;winget 可用(Win11 自带) |
+| Node.js ≥ 18 | **一键部署自动安装**(缺失时) |
+| Tailscale | **一键部署自动安装**;你只需注册一个自己的(免费)Tailscale 账号——[tailscale.com](https://tailscale.com) |
 | HTTPS Certificates | tailnet 后台开启:https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
 | DeepSeek Harness | `npx dsh web` 启动过一次(用于生成 npx 缓存路径) |
 
@@ -95,10 +96,12 @@ dsh plugin --profile web add @zetaluolang/remfs-persistent
 
 ## 一键部署
 
-1. 在 PC 上双击 **`一键部署.cmd`**(或右键以管理员运行,便于读取 Tailscale IP / 配置 Serve);
-2. 脚本自动完成:检查环境 → 读取 Tailscale 信息 → 生成 `%USERPROFILE%\.dsh\launcher\start_harness.ps1` → 开启 HTTPS Serve → 安装持久插件到 `%USERPROFILE%\.dsh\profiles\web` → 打印手机地址;
-3. 手机:打开 Tailscale App(确保 **Connected**)→ 浏览器访问打印出的 `https://...ts.net`;
-4. 以后开机自动运行;手动启停:
+1. 在 PC 上双击 **`一键部署.cmd`**(建议右键"以管理员身份运行",自动安装依赖时需要);
+2. 脚本自动安装缺失的 **Node.js** 和 **Tailscale**(winget,弹 UAC 就点"是";需要联网,稍等一两分钟);
+3. 如果 Tailscale 还没登录,脚本会打开登录页并**停下来等你**:用自己的(免费)Tailscale 账号登录;同时给**手机**也装上 Tailscale App 并用**同一个账号**登录。完成后按回车;
+4. 脚本继续:生成 `%USERPROFILE%\.dsh\launcher\start_harness.ps1` → 开启 HTTPS Serve → 安装持久插件到 `%USERPROFILE%\.dsh\profiles\web` → 打印手机地址;
+5. 手机:打开 Tailscale App(确保 **Connected**)→ 浏览器访问打印出的 `https://...ts.net`;
+6. 以后开机自动运行;手动启停:
    - 启动:`%USERPROFILE%\.dsh\launcher\start_harness.ps1`
    - 重启:`%USERPROFILE%\.dsh\launcher\restart_harness_once.ps1`
    - 停止:`%USERPROFILE%\.dsh\launcher\stop_harness.ps1`(同时结束防睡眠,电脑恢复可休眠)

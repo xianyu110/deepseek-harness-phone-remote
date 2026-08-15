@@ -2,7 +2,7 @@
 
 Control your **DeepSeek Harness Web GUI from your phone** over **Tailscale**, with a built-in **persistent file / workspace plugin**: browse, preview, edit, download and upload PC files from your phone, and start a new agent session in any folder — no system directory-picker required on mobile.
 
-> One-click deploy: `一键部署.cmd` → detects your Tailscale identity → generates launch scripts → enables Tailscale Serve (HTTPS) → installs the persistent plugin → prints the phone URL.
+> One-click deploy, built on **Tailscale**: `一键部署.cmd` → auto-installs missing Node.js / Tailscale (winget) → walks you through the one-time Tailscale sign-in → detects your identity → generates launch scripts → enables Tailscale Serve (HTTPS) → installs the persistent plugin → prints the phone URL. Registering your own Tailscale account is the **only** manual step.
 
 **English** | [中文](README.zh.md)
 
@@ -14,7 +14,7 @@ Control your **DeepSeek Harness Web GUI from your phone** over **Tailscale**, wi
 
 ## Features
 
-- **One-click deploy** — `install.ps1` auto-detects Tailscale IP / MagicDNS name, writes `start_harness.ps1`, enables `tailscale serve` (HTTPS), installs the persistent plugin.
+- **One-click deploy (auto-installs prerequisites)** — `install.ps1` installs missing **Node.js** and **Tailscale** via winget (one UAC click), guides the one-time Tailscale sign-in, then auto-detects the Tailscale IP / MagicDNS name, writes `start_harness.ps1`, enables `tailscale serve` (HTTPS) and installs the persistent plugin.
 - **Auto-start on login** — harness + forwarder + keep-awake start automatically.
 - **Persistent plugin** — `remfs-persistent` is a loader entry: host RPC channel `/remfs` registers at harness start; the client module is served on every page. No re-running after refresh.
 - **Bilingual UI** — English / 中文 (auto-detects browser language, toggle in the workbench header, remembered).
@@ -69,8 +69,9 @@ Layout is fluid (CSS grid / clamp-friendly), but we are validating other resolut
 
 | Item | Notes |
 |---|---|
-| Windows + Node.js ≥ 18 | runs `dsh web` |
-| Tailscale | PC and phone on the same account — [tailscale.com/download](https://tailscale.com/download) |
+| Windows 10/11 | 64-bit; winget available (built-in on Win11) |
+| Node.js ≥ 18 | **auto-installed** by the one-click deploy if missing |
+| Tailscale | **auto-installed** by the one-click deploy; you only need your own (free) Tailscale account — [tailscale.com](https://tailscale.com) |
 | HTTPS Certificates | tailnet admin: https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
 | DeepSeek Harness | run `npx dsh web` once (to populate the npx cache) |
 
@@ -95,10 +96,12 @@ Or use the one-click deploy below, which does all of this automatically.
 
 ## Quick start
 
-1. Double-click **`一键部署.cmd`** on the PC (right-click → Run as administrator if Tailscale IP detection or Serve setup needs it);
-2. The script: checks the environment → reads Tailscale identity → writes `%USERPROFILE%\.dsh\launcher\start_harness.ps1` → enables HTTPS Serve → installs the persistent plugin into `%USERPROFILE%\.dsh\profiles\web` → prints the phone URL;
-3. Phone: open the Tailscale app (**Connected**) → open the printed `https://...ts.net`;
-4. It auto-starts on login afterwards. Manual control:
+1. Double-click **`一键部署.cmd`** on the PC (right-click → Run as administrator; you will need it for the auto-installs);
+2. The script auto-installs **Node.js** and **Tailscale** if missing (click **Yes** on any UAC prompt) — this needs network, give it a minute;
+3. If Tailscale is not signed in yet, the script opens the login page and **waits for you**: log in with your own (free) Tailscale account, and also install the Tailscale app on your **phone** with the same account. Press ENTER when done;
+4. The script then writes `%USERPROFILE%\.dsh\launcher\start_harness.ps1`, enables HTTPS Serve, installs the persistent plugin into `%USERPROFILE%\.dsh\profiles\web`, and prints the phone URL;
+5. Phone: open the Tailscale app (**Connected**) → open the printed `https://...ts.net`;
+6. It auto-starts on login afterwards. Manual control:
    - start: `%USERPROFILE%\.dsh\launcher\start_harness.ps1`
    - restart: `%USERPROFILE%\.dsh\launcher\restart_harness_once.ps1`
    - stop: `%USERPROFILE%\.dsh\launcher\stop_harness.ps1` (also stops keep-awake so the PC can sleep)
