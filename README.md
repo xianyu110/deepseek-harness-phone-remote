@@ -1,6 +1,15 @@
-# DeepSeek Harness Phone Remote
+# DeepSeek Harness Remote Workspace
 
-Control your **DeepSeek Harness Web GUI from your phone** over **Tailscale**, with a built-in **persistent file / workspace plugin**: browse, preview, edit, download and upload PC files from your phone, and start a new agent session in any folder — no system directory-picker required on mobile.
+**Secure Remote Workspace & Filesystem Bridge for DeepSeek Harness.**
+
+> Your DeepSeek Harness, anywhere — the **native web UI**, over a secure network,
+> with **authenticated RPC** and a **capability-bounded filesystem**.
+
+This project does not replace the Harness UI. It turns Harness itself into a
+remote work environment: the phone opens the real DeepSeek Harness web UI over
+Tailscale, and a persistent plugin bridges the two gaps a browser can't close
+remotely — starting/resuming an agent in any folder, and reading, writing,
+uploading and downloading files on the host.
 
 > One-click deploy, built on **Tailscale**: `一键部署.cmd` → auto-installs missing Node.js / Tailscale (winget) → walks you through the one-time Tailscale sign-in → detects your identity → generates launch scripts → enables Tailscale Serve (HTTPS) → installs the persistent plugin → prints the phone URL. Registering your own Tailscale account is the **only** manual step.
 
@@ -8,8 +17,8 @@ Control your **DeepSeek Harness Web GUI from your phone** over **Tailscale**, wi
 
 ## Why
 
-- The Harness Web GUI binds `127.0.0.1` only — phones can't reach it directly.
-- The GUI's directory picker is a privileged method, loopback-only — phones can't pick folders.
+- The Harness Web GUI binds `127.0.0.1` only — a deliberate, sane default. This project keeps that: the GUI is never exposed to the LAN or public internet.
+- A phone browser still can't reach loopback, and the GUI's directory picker is a loopback-only privileged method — so this plugin adds a **secure path** (Tailscale + authenticated RPC) and a **filesystem/workspace bridge** for exactly those two gaps.
 - Sessions normally die with the page — this plugin is a **persistent loader entry**, so the workbench loads on every page automatically, no per-session "run" needed.
 
 ## Features
