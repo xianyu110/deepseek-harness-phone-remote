@@ -114,10 +114,89 @@ window.__ModuleLoader__.load({
 
     const SYSTEM_DIRS = new Set(['system volume information', '$recycle.bin', 'recovery', 'config.msi', '$sysreset', 'windows', 'perflogs', 'msocache', 'windows.old', '$winreagent'])
 
+    // ── i18n ─────────────────────────────────────────────────────────────────
+    const L10N = {
+      zh: {
+        tabSession: '＋ 新建会话', tabFiles: '📁 文件浏览',
+        headSession: '新建会话', headFiles: '文件浏览',
+        close: '✕ 关闭', loading: '加载中…',
+        wsSection: '已有工作区(点击直接开新会话)', wsEmpty: '暂无,可从下方目录新建',
+        wsSection2: '或选择文件夹作为新工作区',
+        startHere: '🚀 在这里开始会话', continueHere: '🚀 在此继续会话', busy: '处理中…',
+        absPath: '绝对路径',
+        hideSystemTitle: '隐藏系统保护目录', hideSystem: '隐藏系统目录', manageRoots: '⚙ 管理可访问目录',
+        editPrefix: '编辑: ', save: '💾 保存', cancel: '取消',
+        download: '⬇ 下载', editFile: '✎ 编辑',
+        tooLarge: '文件超过 5MB,暂不支持预览/下载', binary: '二进制文件,点击下载查看',
+        uploadHint: '⬆ 上传文本文件到当前目录',
+        managerTitle: '可访问目录(每行一个,手机端只能浏览这些目录):',
+        exampleRoots: 'C:\\Users\\zeta\\Documents\nD:\\素材',
+        savedToast: '✅ 已保存: ', uploadedToast: '✅ 已上传: ',
+        sessionStarted: '✅ 已在此文件夹开始新会话', wsOpened: '✅ 已打开工作区并开始新会话',
+        rootsSaved: '✅ 可访问目录已保存({n} 个)', saveFailed: '❌ 保存失败',
+        lockDenied: '🔒 无权限访问(系统保护目录或其他用户的文件夹)', outside: '该路径不在可访问目录内',
+        wsBadge: '★ 工作区',
+        toggleTitleOpen: '关闭', toggleTitleClosed: '新建会话 / 文件浏览',
+        sidebarOpen: '收起侧边栏', sidebarClosed: '展开侧边栏',
+        headerNew: '＋ 新会话',
+        slotLabel: '新会话', slotPageLabel: '＋ 新会话 / 文件浏览',
+        otherLang: 'EN'
+      },
+      en: {
+        tabSession: '＋ New Session', tabFiles: '📁 Files',
+        headSession: 'New Session', headFiles: 'Files',
+        close: '✕ Close', loading: 'Loading…',
+        wsSection: 'Existing workspaces (tap to open a new session)', wsEmpty: 'None yet — pick a folder below',
+        wsSection2: 'Or choose a folder as a new workspace',
+        startHere: '🚀 Start a session here', continueHere: '🚀 Continue here', busy: 'Working…',
+        absPath: 'Absolute path',
+        hideSystemTitle: 'Hide system-protected dirs', hideSystem: 'Hide system dirs', manageRoots: '⚙ Manage allowed dirs',
+        editPrefix: 'Editing: ', save: '💾 Save', cancel: 'Cancel',
+        download: '⬇ Download', editFile: '✎ Edit',
+        tooLarge: 'File exceeds 5 MB — preview/download unsupported', binary: 'Binary file — tap Download to view',
+        uploadHint: '⬆ Upload a text file to this folder',
+        managerTitle: 'Allowed dirs (one per line; the phone can only browse these):',
+        exampleRoots: 'C:\\Users\\zeta\\Documents\nD:\\Assets',
+        savedToast: '✅ Saved: ', uploadedToast: '✅ Uploaded: ',
+        sessionStarted: '✅ Session started in this folder', wsOpened: '✅ Workspace opened, new session started',
+        rootsSaved: '✅ Allowed dirs saved ({n})', saveFailed: '❌ Save failed',
+        lockDenied: '🔒 Access denied (system-protected or another user\'s folder)', outside: 'Path is outside the allowed dirs',
+        wsBadge: '★ Workspace',
+        toggleTitleOpen: 'Close', toggleTitleClosed: 'New session / Files',
+        sidebarOpen: 'Collapse sidebar', sidebarClosed: 'Expand sidebar',
+        headerNew: '＋ New Session',
+        slotLabel: 'New Session', slotPageLabel: '＋ New Session / Files',
+        otherLang: '中'
+      }
+    }
+
+    let lang = 'zh'
+    try {
+      const saved = window.localStorage.getItem('remfs-lang')
+      if (saved === 'zh' || saved === 'en') lang = saved
+      else lang = (window.navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'
+    } catch { /* default zh */ }
+    const langListeners = new Set()
+    const setLang = (l) => {
+      lang = l
+      try { window.localStorage.setItem('remfs-lang', l) } catch { /* ignore */ }
+      langListeners.forEach((fn) => fn())
+    }
+    const toggleLang = () => setLang(lang === 'zh' ? 'en' : 'zh')
+    const t = (key, vars) => {
+      const table = L10N[lang] || L10N.zh
+      let s = table[key] !== undefined ? table[key] : key
+      if (vars) {
+        for (const k of Object.keys(vars)) s = s.replace('{' + k + '}', String(vars[k]))
+      }
+      return s
+    }
+    const subscribeLang = (fn) => { langListeners.add(fn); return () => langListeners.delete(fn) }
+
     const friendlyErr = (msg) => {
       const s = String(msg || '')
-      if (/denied|EACCES|EPERM/i.test(s)) return { lock: true, text: '🔒 无权限访问(系统保护目录或其他用户的文件夹)' }
-      if (/allowed|范围|outside/i.test(s)) return { lock: true, text: '该路径不在可访问目录内' }
+      if (/denied|EACCES|EPERM/i.test(s)) return { lock: true, text: t('lockDenied') }
+      if (/allowed|范围|outside/i.test(s)) return { lock: true, text: t('outside') }
       return { lock: false, text: s }
     }
 
@@ -139,6 +218,8 @@ window.__ModuleLoader__.load({
       const [managing, setManaging] = React.useState(false)
       const [manageText, setManageText] = React.useState('')
       const [moreOpen, setMoreOpen] = React.useState(false)
+      const [, forceLang] = React.useState(0)
+      React.useEffect(() => subscribeLang(() => forceLang((n) => n + 1)), [])
 
       const rpc = (method, payload) => conn.rpc.call('/remfs', method, payload)
 
@@ -188,7 +269,7 @@ window.__ModuleLoader__.load({
         rpc('write', { path: editing.path, content: editText }).then((r) => {
           if (r && r.ok) {
             setEditing(null); setPreview(null); load(path)
-            showToast('✅ 已保存: ' + editing.name, 'success')
+            showToast(t('savedToast') + editing.name, 'success')
           } else setError(friendlyErr((r && r.error && r.error.message) || 'save failed'))
         }).catch((e) => setError(friendlyErr(String(e))))
       }
@@ -197,7 +278,7 @@ window.__ModuleLoader__.load({
         if (!file) return
         file.text().then((text) => {
           rpc('write', { path: join(path, file.name), content: text }).then((r) => {
-            if (r && r.ok) { load(path); showToast('✅ 已上传: ' + file.name, 'success') }
+            if (r && r.ok) { load(path); showToast(t('uploadedToast') + file.name, 'success') }
             else setError(friendlyErr((r && r.error && r.error.message) || 'upload failed'))
           }).catch((e) => setError(friendlyErr(String(e))))
         }).catch((e) => setError(friendlyErr(String(e))))
@@ -223,7 +304,7 @@ window.__ModuleLoader__.load({
         rpc('ensureWorkspace', { path }).then((r) => {
           if (r && r.ok && r.value && r.value.workspaceId) {
             return ctxWorkspaces.connectWorkspace(r.value.workspaceId).then(() => {
-              showToast('✅ 已在此文件夹开始新会话', 'success')
+              showToast(t('sessionStarted'), 'success')
               if (onClose) onClose()
             }).catch((e2) => {
               const fe = friendlyErr(String(e2))
@@ -245,7 +326,7 @@ window.__ModuleLoader__.load({
         if (busy) return
         setBusy(true)
         Promise.resolve(ctxWorkspaces.connectWorkspace(id)).then(() => {
-          showToast('✅ 已打开工作区并开始新会话', 'success')
+          showToast(t('wsOpened'), 'success')
           if (onClose) onClose()
         }).catch((e) => {
           showToast('❌ ' + String((e && e.message) || e), 'error')
@@ -257,15 +338,15 @@ window.__ModuleLoader__.load({
         rpc('setAllowed', { roots }).then((r) => {
           if (r && r.ok) {
             setManaging(false)
-            showToast('✅ 可访问目录已保存(' + roots.length + ' 个)', 'success')
+            showToast(t('rootsSaved', { n: roots.length }), 'success')
             refresh(null)
           } else {
             setError(friendlyErr((r && r.error && r.error.message) || 'save failed'))
-            showToast('❌ 保存失败', 'error')
+            showToast(t('saveFailed'), 'error')
           }
         }).catch((e) => {
           setError(friendlyErr(String(e)))
-          showToast('❌ 保存失败', 'error')
+          showToast(t('saveFailed'), 'error')
         })
       }
 
@@ -295,13 +376,13 @@ window.__ModuleLoader__.load({
           crumbs
         ),
         React.createElement('div', { className: 'remfs-path' },
-          React.createElement('input', { value: inputPath, onChange: (e) => setInputPath(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') load(inputPath) }, placeholder: '绝对路径' }),
+          React.createElement('input', { value: inputPath, onChange: (e) => setInputPath(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') load(inputPath) }, placeholder: t('absPath') }),
           React.createElement('button', { className: 'remfs-btn primary', onClick: () => load(inputPath) }, 'Go')
         )
       )
 
       const listRows = React.createElement('div', { className: 'remfs-list' },
-        loading ? React.createElement('div', { className: 'remfs-row' }, '加载中…') :
+        loading ? React.createElement('div', { className: 'remfs-row' }, t('loading')) :
         sorted.map((e) => {
           const isDir = e.type === 'directory'
           const click = () => {
@@ -314,7 +395,7 @@ window.__ModuleLoader__.load({
           return React.createElement('div', { key: e.name, className: 'remfs-row' + (dim ? ' file-dim' : ''), onClick: click },
             React.createElement('span', null, isDir ? '📁' : '📄'),
             React.createElement('span', { className: 'n' }, e.name),
-            isWs ? React.createElement('span', { className: 'remfs-wsbadge' }, '★ 工作区') : null,
+            isWs ? React.createElement('span', { className: 'remfs-wsbadge' }, t('wsBadge')) : null,
             React.createElement('span', { className: 's' }, fmtSize(e.size))
           )
         })
@@ -326,20 +407,20 @@ window.__ModuleLoader__.load({
       )
 
       const moreMenu = moreOpen ? React.createElement('div', { className: 'remfs-moremenu' },
-        React.createElement('label', { className: 'remfs-hidebox', title: '隐藏系统保护目录' },
+        React.createElement('label', { className: 'remfs-hidebox', title: t('hideSystemTitle') },
           React.createElement('input', { type: 'checkbox', checked: hideSystem, onChange: (e) => setHideSystem(e.target.checked) }),
-          '隐藏系统目录'
+          t('hideSystem')
         ),
-        React.createElement('button', { className: 'remfs-manage', onClick: () => { setMoreOpen(false); setManaging(true); setManageText(allowed.join('\n')) } }, '⚙ 管理可访问目录')
+        React.createElement('button', { className: 'remfs-manage', onClick: () => { setMoreOpen(false); setManaging(true); setManageText(allowed.join('\n')) } }, t('manageRoots'))
       ) : null
 
       const errLine = error ? React.createElement('div', { className: 'remfs-err' + (error.lock ? ' lock' : '') }, error.text) : null
 
       const sessionBody = React.createElement(React.Fragment, null,
         React.createElement('div', { className: 'remfs-wssec' },
-          React.createElement('span', { className: 'lbl' }, '已有工作区(点击直接开新会话)'),
+          React.createElement('span', { className: 'lbl' }, t('wsSection')),
           React.createElement('div', { className: 'remfs-wschips' },
-            wsList.length === 0 ? React.createElement('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#999)' } }, '暂无,可从下方目录新建') :
+            wsList.length === 0 ? React.createElement('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#999)' } }, t('wsEmpty')) :
             wsList.map((w) => React.createElement('button', { key: w.id, className: 'remfs-wschip', onClick: () => openWorkspace(w.id) },
               React.createElement('span', { className: 't' }, w.title || w.path),
               React.createElement('span', { className: 'pt' }, w.path)
@@ -347,14 +428,14 @@ window.__ModuleLoader__.load({
           )
         ),
         React.createElement('div', { className: 'remfs-wssec' },
-          React.createElement('span', { className: 'lbl' }, '或选择文件夹作为新工作区'),
+          React.createElement('span', { className: 'lbl' }, t('wsSection2')),
           rootsRow(false)
         ),
         navBar,
         errLine,
         listRows,
         React.createElement('div', { className: 'remfs-go' },
-          React.createElement('button', { className: 'remfs-wsbtn', disabled: !path || loading || busy, onClick: startSessionHere }, busy ? '处理中…' : (currentIsWs ? '🚀 在此继续会话' : '🚀 在这里开始会话'))
+          React.createElement('button', { className: 'remfs-wsbtn', disabled: !path || loading || busy, onClick: startSessionHere }, busy ? t('busy') : (currentIsWs ? t('continueHere') : t('startHere')))
         )
       )
 
@@ -365,11 +446,11 @@ window.__ModuleLoader__.load({
         errLine,
         listRows,
         editing ? React.createElement('div', { className: 'remfs-prev' },
-          React.createElement('div', null, '编辑: ' + editing.name),
+          React.createElement('div', null, t('editPrefix') + editing.name),
           React.createElement('textarea', { value: editText, onChange: (e) => setEditText(e.target.value), style: { minHeight: 140, fontFamily: 'monospace', fontSize: 12, width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,.2)', color: 'inherit', border: '1px solid rgba(128,128,128,.3)', borderRadius: 6 } }),
           React.createElement('div', { className: 'remfs-tools' },
-            React.createElement('button', { className: 'remfs-btn primary', onClick: saveEdit }, '💾 保存'),
-            React.createElement('button', { className: 'remfs-btn', onClick: () => { setEditing(null); setPreview(null) } }, '取消')
+            React.createElement('button', { className: 'remfs-btn primary', onClick: saveEdit }, t('save')),
+            React.createElement('button', { className: 'remfs-btn', onClick: () => { setEditing(null); setPreview(null) } }, t('cancel'))
           )
         ) :
         preview ? React.createElement('div', { className: 'remfs-prev' },
@@ -380,16 +461,16 @@ window.__ModuleLoader__.load({
           ),
           preview.kind === 'text' ? React.createElement('pre', null, preview.text) :
           preview.kind === 'base64' && isImage ? React.createElement('img', { src: 'data:' + mimeOf(preview.name) + ';base64,' + preview.base64, alt: preview.name }) :
-          preview.kind === 'too-large' ? React.createElement('div', null, '文件超过 5MB,暂不支持预览/下载') :
-          React.createElement('div', null, '二进制文件,点击下载查看'),
+          preview.kind === 'too-large' ? React.createElement('div', null, t('tooLarge')) :
+          React.createElement('div', null, t('binary')),
           React.createElement('div', { className: 'remfs-tools' },
-            React.createElement('button', { className: 'remfs-btn primary', onClick: download }, '⬇ 下载'),
-            preview.kind === 'text' ? React.createElement('button', { className: 'remfs-btn', onClick: () => { setEditing({ path: join(path, preview.name), name: preview.name }); setEditText(preview.text) } }, '✎ 编辑') : null
+            React.createElement('button', { className: 'remfs-btn primary', onClick: download }, t('download')),
+            preview.kind === 'text' ? React.createElement('button', { className: 'remfs-btn', onClick: () => { setEditing({ path: join(path, preview.name), name: preview.name }); setEditText(preview.text) } }, t('editFile')) : null
           )
         ) : null,
         React.createElement('div', { className: 'remfs-prev', style: { borderTop: 'none', paddingTop: 0, maxHeight: 'none' } },
           React.createElement('label', { className: 'remfs-btn remfs-upload' },
-            '⬆ 上传文本文件到当前目录',
+            t('uploadHint'),
             React.createElement('input', { type: 'file', accept: '.txt,.md,.json,.js,.ts,.tsx,.py,.html,.css,.yaml,.yml,.csv,.log,.xml,.sh,.ps1,.ini,.env', style: { display: 'none' }, onChange: (e) => { if (e.target.files && e.target.files[0]) upload(e.target.files[0]); e.target.value = '' } })
           )
         )
@@ -397,21 +478,22 @@ window.__ModuleLoader__.load({
 
       return React.createElement('div', { className: embedded ? 'remfs-block' : 'remfs-panel' },
         React.createElement('div', { className: 'remfs-head' },
-          React.createElement('b', null, tab === 'session' ? '新建会话' : '文件浏览'),
+          React.createElement('b', null, tab === 'session' ? t('headSession') : t('headFiles')),
           React.createElement('span', { className: 'p' }, path || '…'),
-          currentIsWs ? React.createElement('span', { className: 'remfs-wsbadge' }, '★ 工作区') : null,
-          React.createElement('button', { className: 'remfs-btn remfs-close', onClick: onClose }, '✕ 关闭')
+          currentIsWs ? React.createElement('span', { className: 'remfs-wsbadge' }, t('wsBadge')) : null,
+          React.createElement('button', { className: 'remfs-btn', title: lang === 'zh' ? 'English' : '中文', onClick: toggleLang }, t('otherLang')),
+          React.createElement('button', { className: 'remfs-btn remfs-close', onClick: onClose }, t('close'))
         ),
         React.createElement('div', { className: 'remfs-tabs' },
-          React.createElement('button', { className: 'remfs-tab' + (tab === 'session' ? ' on' : ''), onClick: () => setTab('session') }, '＋ 新建会话'),
-          React.createElement('button', { className: 'remfs-tab' + (tab === 'files' ? ' on' : ''), onClick: () => setTab('files') }, '📁 文件浏览')
+          React.createElement('button', { className: 'remfs-tab' + (tab === 'session' ? ' on' : ''), onClick: () => setTab('session') }, t('tabSession')),
+          React.createElement('button', { className: 'remfs-tab' + (tab === 'files' ? ' on' : ''), onClick: () => setTab('files') }, t('tabFiles'))
         ),
         managing ? React.createElement('div', { className: 'remfs-manager' },
-          React.createElement('div', null, '可访问目录(每行一个,手机端只能浏览这些目录):'),
-          React.createElement('textarea', { value: manageText, onChange: (e) => setManageText(e.target.value), placeholder: 'C:\\Users\\zeta\\Documents\nD:\\素材' }),
+          React.createElement('div', null, t('managerTitle')),
+          React.createElement('textarea', { value: manageText, onChange: (e) => setManageText(e.target.value), placeholder: t('exampleRoots') }),
           React.createElement('div', { className: 'remfs-tools' },
-            React.createElement('button', { className: 'remfs-btn primary', onClick: saveAllowed }, '💾 保存'),
-            React.createElement('button', { className: 'remfs-btn', onClick: () => setManaging(false) }, '取消')
+            React.createElement('button', { className: 'remfs-btn primary', onClick: saveAllowed }, t('save')),
+            React.createElement('button', { className: 'remfs-btn', onClick: () => setManaging(false) }, t('cancel'))
           )
         ) :
         React.createElement('div', { className: 'remfs-body' }, tab === 'session' ? sessionBody : filesBody)
@@ -428,7 +510,8 @@ window.__ModuleLoader__.load({
     function HeaderToggle() {
       const [, force] = React.useState(0)
       React.useEffect(() => subscribe(() => force((n) => n + 1)), [])
-      return React.createElement('button', { className: 'remfs-hbtn' + (open ? ' open' : ''), title: open ? '关闭' : '新建会话 / 文件浏览', onClick: () => setOpen(!open) }, open ? '✕ 关闭' : '＋ 新会话')
+      React.useEffect(() => subscribeLang(() => force((n) => n + 1)), [])
+      return React.createElement('button', { className: 'remfs-hbtn' + (open ? ' open' : ''), title: open ? t('toggleTitleOpen') : t('toggleTitleClosed'), onClick: () => setOpen(!open) }, open ? t('close') : t('headerNew'))
     }
 
     function OverlayBridge({ conn }) {
@@ -487,14 +570,14 @@ window.__ModuleLoader__.load({
         const btn = document.createElement('button')
         btn.className = 'remfs-sbar'
         btn.textContent = '☰'
-        btn.title = '展开侧边栏'
+        btn.title = t('sidebarClosed')
         let sbOpen = false
         let dragging = false
         let moved = false
         let sx = 0, sy = 0, ox = 0, oy = 0
         const applyState = () => {
           btn.textContent = sbOpen ? '✕' : '☰'
-          btn.title = sbOpen ? '收起侧边栏' : '展开侧边栏'
+          btn.title = sbOpen ? t('sidebarOpen') : t('sidebarClosed')
           if (sbOpen) document.documentElement.classList.add('remfs-sidebar-open')
           else document.documentElement.classList.remove('remfs-sidebar-open')
         }
@@ -537,12 +620,12 @@ window.__ModuleLoader__.load({
       })
 
       ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
-        { name: 'conversation.session.header.utilities', id: 'remfs.header', order: 20, label: '新会话' },
+        { name: 'conversation.session.header.utilities', id: 'remfs.header', order: 20, label: t('slotLabel') },
         () => React.createElement(HeaderToggle, null)
       ))
 
       ctx.slots.inject('settings.section', () => ctx.slots.register(
-        { name: 'settings.section', id: 'remfs.page', order: 60, label: '＋ 新会话 / 文件浏览' },
+        { name: 'settings.section', id: 'remfs.page', order: 60, label: t('slotPageLabel') },
         (props) => React.createElement(Workbench, { embedded: true, conn, onClose: props && typeof props.close === 'function' ? props.close : null })
       ))
 

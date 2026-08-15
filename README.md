@@ -1,122 +1,131 @@
-# DeepSeek Harness 手机远程控制(Phone Remote)
+# DeepSeek Harness Phone Remote
 
-通过 **Tailscale** 用手机安全地远程访问 PC 上的 DeepSeek Harness Web GUI,并内置一个**持久化文件/工作区插件**:手机上可以直接浏览、查看、编辑 PC 文件,以及在任何文件夹开始新的会话(解决手机端无法弹系统目录选择框的问题)。
+Control your **DeepSeek Harness Web GUI from your phone** over **Tailscale**, with a built-in **persistent file / workspace plugin**: browse, preview, edit, download and upload PC files from your phone, and start a new agent session in any folder — no system directory-picker required on mobile.
 
-> 部署包:一键部署(`一键部署.cmd`)→ 自动探测 Tailscale 信息 → 生成启动脚本 → 开启 Tailscale Serve(HTTPS)→ 安装持久插件 → 打印手机访问地址。
+> One-click deploy: `一键部署.cmd` → detects your Tailscale identity → generates launch scripts → enables Tailscale Serve (HTTPS) → installs the persistent plugin → prints the phone URL.
 
-## 架构
+**English** | [中文](README.zh.md)
+
+## Why
+
+- The Harness Web GUI binds `127.0.0.1` only — phones can't reach it directly.
+- The GUI's directory picker is a privileged method, loopback-only — phones can't pick folders.
+- Sessions normally die with the page — this plugin is a **persistent loader entry**, so the workbench loads on every page automatically, no per-session "run" needed.
+
+## Features
+
+- **One-click deploy** — `install.ps1` auto-detects Tailscale IP / MagicDNS name, writes `start_harness.ps1`, enables `tailscale serve` (HTTPS), installs the persistent plugin.
+- **Auto-start on login** — harness + forwarder + keep-awake start automatically.
+- **Phone file workbench**:
+  - *Session tab*: list existing workspaces and open one, or "start a session here" in any folder;
+  - *Files tab*: browse, breadcrumbs, text preview / edit / download, upload, image preview;
+  - Manageable allowed-roots allowlist (default `Documents`);
+  - Mobile-adapted: collapsible sidebar button, draggable floating ball, toast feedback.
+- **Persistent plugin** — `remfs-persistent` is a loader entry: host RPC channel `/remfs` registers at harness start; the client module is served on every page. No re-running after refresh.
+- **Bilingual UI** — English / 中文 (auto-detects browser language, toggle in the workbench header, remembered).
+
+## Architecture
 
 ```
-手机 (OPPO / 任意 Android / iOS)
-  │  Tailscale App(已登录同一 tailnet)
-  ├─ https://<电脑名>.<tailnet>.ts.net      ← Tailscale Serve(HTTPS,推荐)
-  └─ http://<TailscaleIP>:3080              ← 备用:TCP 转发器 tailscale_forward.js
+Phone (any Android / iOS)
+  │  Tailscale app (same tailnet)
+  ├─ https://<pc-name>.<tailnet>.ts.net      ← Tailscale Serve (HTTPS, recommended)
+  └─ http://<TailscaleIP>:3080              ← fallback: TCP forwarder tailscale_forward.js
         │
         ▼
-PC(仅监听本机 + tailnet,不监听 0.0.0.0)
-  ├─ 127.0.0.1:3080        dsh web(GUI,仅本机)
-  └─ 100.x.y.z:3080        tailscale_forward.js → 转发到 127.0.0.1:3080
+PC (listens on loopback + tailnet only, never 0.0.0.0)
+  ├─ 127.0.0.1:3080        dsh web (GUI, loopback only)
+  └─ 100.x.y.z:3080        tailscale_forward.js → forwards to 127.0.0.1:3080
 ```
 
-- Harness GUI 只绑定 `127.0.0.1`,局域网/公网默认不可达;
-- 手机通过 **Tailscale WireGuard 加密隧道**访问,HTTPS 由 tailnet 证书提供;
-- `/api` 与插件 RPC 走浏览器信任围栏:仅接受 loopback 与 `--trusted-host` 声明的主机。
+- GUI binds `127.0.0.1`; the LAN / public internet cannot reach it.
+- Phone traffic travels through the **Tailscale WireGuard tunnel**; HTTPS is served with the tailnet certificate.
+- The `/api` and plugin RPC go through the browser-trust fence: only loopback and `--trusted-host` authorities pass.
 
-## 功能
+## Tested devices
 
-- **一键部署**:`install.ps1` 自动探测 Tailscale IP/域名、写入 `start_harness.ps1`、启用 `tailscale serve`、安装持久插件;
-- **开机自启**:安装后每次登录自动拉起 Harness + 转发器 + 防睡眠;
-- **手机文件工作台**:
-  - 会话标签页:列出已有工作区一键打开;或在任意文件夹"在这里开始会话";
-  - 文件标签页:浏览、面包屑导航、文本预览/编辑/下载、上传、图片预览;
-  - 可访问目录管理(白名单,默认 `Documents`,可增减);
-  - 侧边栏展开按钮、可拖动悬浮球(小屏适配);
-- **持久化插件**:`remfs-persistent` 以 loader 条目方式常驻,刷新页面**无需重新运行**,host 通道 `/remfs` 随 Harness 启动即注册。
+| Device | Screen | Status |
+|---|---|---|
+| OPPO Find X8 Ultra | ~1440×3168 | ✅ primary test device |
+| More devices / resolutions | — | 🚧 planned |
 
-## 环境要求
+Layout is fluid (CSS grid / clamp-friendly), but we are validating other resolutions — feel free to open an issue with your device model + screen size and any layout problem you see.
 
-| 项目 | 说明 |
+## Requirements
+
+| Item | Notes |
 |---|---|
-| Windows + Node.js ≥ 18 | 运行 `dsh web` |
-| Tailscale | 手机与 PC 登录同一账号,见 [tailscale.com/download](https://tailscale.com/download) |
-| HTTPS Certificates | tailnet 后台开启:https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
-| DeepSeek Harness | `npx dsh web` 启动过一次(用于生成 npx 缓存路径) |
+| Windows + Node.js ≥ 18 | runs `dsh web` |
+| Tailscale | PC and phone on the same account — [tailscale.com/download](https://tailscale.com/download) |
+| HTTPS Certificates | tailnet admin: https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
+| DeepSeek Harness | run `npx dsh web` once (to populate the npx cache) |
 
-## 一键部署
+## Quick start
 
-1. 在 PC 上双击 **`一键部署.cmd`**(或右键以管理员运行,便于读取 Tailscale IP / 配置 Serve);
-2. 脚本自动完成:检查环境 → 读取 Tailscale 信息 → 生成 `%USERPROFILE%\.dsh\launcher\start_harness.ps1` → 开启 HTTPS Serve → 安装持久插件到 `%USERPROFILE%\.dsh\profiles\web` → 打印手机地址;
-3. 手机:打开 Tailscale App(确保 **Connected**)→ 浏览器访问打印出的 `https://...ts.net`;
-4. 以后开机自动运行;手动启停:
-   - 启动:`%USERPROFILE%\.dsh\launcher\start_harness.ps1`
-   - 重启:`%USERPROFILE%\.dsh\launcher\restart_harness_once.ps1`
-   - 停止:`%USERPROFILE%\.dsh\launcher\stop_harness.ps1`(同时结束防睡眠,电脑恢复可休眠)
+1. Double-click **`一键部署.cmd`** on the PC (right-click → Run as administrator if Tailscale IP detection or Serve setup needs it);
+2. The script: checks the environment → reads Tailscale identity → writes `%USERPROFILE%\.dsh\launcher\start_harness.ps1` → enables HTTPS Serve → installs the persistent plugin into `%USERPROFILE%\.dsh\profiles\web` → prints the phone URL;
+3. Phone: open the Tailscale app (**Connected**) → open the printed `https://...ts.net`;
+4. It auto-starts on login afterwards. Manual control:
+   - start: `%USERPROFILE%\.dsh\launcher\start_harness.ps1`
+   - restart: `%USERPROFILE%\.dsh\launcher\restart_harness_once.ps1`
+   - stop: `%USERPROFILE%\.dsh\launcher\stop_harness.ps1` (also stops keep-awake so the PC can sleep)
 
-### install.ps1 具体做了什么
+### What install.ps1 does
 
-- 探测 Tailscale IP(`tailscale ip -4`)与 MagicDNS 域名,替换模板占位符生成 `start_harness.ps1`;
-- 自动定位 npx 缓存中的 `dsh` 入口(`_npx` 哈希目录会随安装变化,不写死);
-- `tailscale serve --bg http://127.0.0.1:3080` 开启 HTTPS;
-- 把 `remfs-persistent`(host RPC 通道 + 浏览器模块)装入 web profile:
-  - 源码 → `profiles\web\vendor\remfs-persistent\`,并链接/复制到 `node_modules\@zeta\remfs-persistent`;
-  - 幂等写入 `profiles\web\cordis.patch.yml` 的 loader 条目(含 `inject: [connection, fs]`);
-- 脚本统一安装到 `%USERPROFILE%\.dsh\launcher\`(**不在 Documents 内**,见安全章节)。
+- Detects the Tailscale IP (`tailscale ip -4`) and MagicDNS name, fills the template placeholders into `start_harness.ps1`;
+- Auto-locates the `dsh` entry in the npx cache (the `_npx` hash dir changes between installs — never hardcoded);
+- `tailscale serve --bg http://127.0.0.1:3080` → HTTPS;
+- Installs `remfs-persistent` (host RPC channel + browser module) into the web profile:
+  - source → `profiles\web\vendor\remfs-persistent\`, linked/copied to `node_modules\@zeta\remfs-persistent`;
+  - idempotently writes the loader entry into `profiles\web\cordis.patch.yml` (with `inject: [connection, fs]`);
+- Scripts are installed to `%USERPROFILE%\.dsh\launcher\` (**not inside Documents** — see Security).
 
-## ⚠️ 安全须知(务必阅读)
+## ⚠️ Security notes (please read)
 
-- **没有登录/密码/2FA。** GUI 与文件插件的信任边界 = **"能连上你 tailnet 的设备"**。任何加入该 tailnet 的设备都能无登录读写你的文件、驱动 agent 执行命令。**不要共享 tailnet、不要加未知设备、手机丢失请立即在 tailnet 后台移除该设备**。
-- **允许目录只是 UI 护栏,不是安全边界。** "管理可访问目录"可以扩大到任意路径。
-- **host 层保护路径(不可绕过):** 系统目录(`Windows`、`System Volume Information`、`$Recycle.Bin`、`Program Files`、`ProgramData` 等)、凭据/密钥文件(`.credentials.yaml`、`.ssh`、`id_rsa`、`*.pem/.key/.pfx`、`ntuser.dat`、C 盘系统 hive)、隐私数据目录(`xwechat_files`、`KingsoftData`、`WPSCloudSvr`、`Tencent Files`)。白名单扩到 `C:\` 也读不到这些。已注册工作区若位于受保护目录内(如微信文件工作区)仍可访问。
-- **DeepSeek API Key** 明文位于 `%USERPROFILE%\.dsh\.credentials.yaml`。保护路径已拦截它;请勿把该文件放进任何会被上传的目录。
-- 新会话默认权限为受限(`workspace-write` + 操作需确认);个别会话可按需切换,但请保持默认。
-- 明文 HTTP 回退路径(`http://<IP>:3080`)仅用于 tailnet 内部(WireGuard 已加密),日常请用 HTTPS。
+- **No login / password / 2FA.** The trust boundary of the GUI and the file plugin is **"any device that can reach your tailnet"**. Any tailnet member can read/write your files and drive the agent without authentication. **Do not share your tailnet, do not add unknown devices, and remove a lost phone from the tailnet admin console immediately.**
+- **The allowed-roots allowlist is a UI guard, not a security boundary.** It can be expanded to any path from the workbench.
+- **Host-enforced protected paths (cannot be bypassed):** system dirs (`Windows`, `System Volume Information`, `$Recycle.Bin`, `Program Files`, `ProgramData`, …), credential/key files (`.credentials.yaml`, `.ssh`, `id_rsa`, `*.pem/.key/.pfx`, `ntuser.dat`, system hive files on the C: root), and private data dirs (`xwechat_files`, `KingsoftData`, `WPSCloudSvr`, `Tencent Files`). These stay blocked even if the allowlist is expanded to `C:\`. Registered workspaces located inside a protected area remain reachable.
+- **DeepSeek API key** is stored in plaintext at `%USERPROFILE%\.dsh\.credentials.yaml` — protected by the deny list; never put that file anywhere that gets uploaded.
+- New sessions default to restricted permissions (`workspace-write` + confirmation for writes); keep it that way.
+- The plain-HTTP fallback (`http://<IP>:3080`) is tailnet-only (WireGuard already encrypts); prefer HTTPS.
 
-## 目录结构
+## Repository layout
 
 ```
 dsh-remote/
-├─ 一键部署.cmd              一键部署入口
-├─ install.ps1               部署脚本(探测/生成/安装)
-├─ start_harness.template.ps1  启动脚本模板(占位符由 install.ps1 填充)
-├─ tailscale_forward.js      TCP 转发器(tailnet IP → 127.0.0.1:3080)
-├─ restart_harness.ps1       重启(杀 3080 监听后重新拉起)
-├─ stop_harness.ps1          停止 Harness + 转发器 + 防睡眠
-├─ keep_awake.ps1            防睡眠(ES_SYSTEM_REQUIRED 循环)
-└─ remfs-persistent/         持久插件(host RPC 通道 + 浏览器工作台)
-   ├─ package.json           dsh.client 清单 + exports
-   ├─ lib/host.js            /remfs RPC 通道(信任围栏 + 白名单 + 保护路径)
-   └─ lib/client.js          手机工作台 UI(会话/文件双标签、toast、悬浮球)
+├─ 一键部署.cmd              one-click deploy entry
+├─ install.ps1               deploy script (detect / generate / install)
+├─ start_harness.template.ps1  launcher template (placeholders filled by install.ps1)
+├─ tailscale_forward.js      TCP forwarder (tailnet IP → 127.0.0.1:3080)
+├─ restart_harness.ps1       restart (kill :3080 listeners, relaunch)
+├─ stop_harness.ps1          stop harness + forwarder + keep-awake
+├─ keep_awake.ps1            keep-awake (ES_SYSTEM_REQUIRED loop)
+└─ remfs-persistent/         the persistent plugin (host RPC + browser workbench)
+   ├─ package.json           dsh.client manifest + exports
+   ├─ lib/host.js            /remfs RPC channel (trust fence + allowlist + protected paths)
+   └─ lib/client.js          phone workbench UI (session/files tabs, toast, floating ball)
 ```
 
-## 常见问题
+## Troubleshooting
 
-| 现象 | 处理 |
+| Symptom | Fix |
 |---|---|
-| 手机打不开页面 | 手机 Tailscale 是否 Connected;PC 侧 `start_harness.ps1` 是否已跑(3080 监听) |
-| 手机访问显示 403 | 访问地址的 Host 不在信任列表;HTTPS 请用 `<电脑名>.<tailnet>.ts.net`,HTTP 用 PC 的 Tailscale IP |
-| HTTPS 证书报错 | tailnet 后台开启 HTTPS Certificates 后重跑 install.ps1 |
-| 手机端无法浏览某些目录 | 该目录不在白名单(可"管理可访问目录"添加);系统/凭据/隐私目录被保护路径硬性拦截 |
-| 会话没反应/插件不见了 | 刷新页面(持久插件随页面自动加载,无需重新运行) |
-| 升级 dsh 后启动失败 | npx 缓存路径变化,重跑一次 `一键部署.cmd` 重新探测 |
+| Phone can't open the page | Phone Tailscale **Connected**? PC harness running (`start_harness.ps1`, :3080 listening)? |
+| 403 on the phone | Host header not in the trust list — HTTPS: use `<pc-name>.<tailnet>.ts.net`; HTTP: the PC's Tailscale IP |
+| HTTPS certificate error | Enable HTTPS Certificates in the tailnet admin, then re-run install.ps1 |
+| Some folders not browsable on phone | Not in the allowlist (add via "manage allowed dirs"); system/credential/private dirs are hard-blocked |
+| Plugin missing after refresh | Refresh again — the persistent module loads with every page (no "run" needed) |
+| Launch fails after a dsh upgrade | The npx cache path changed — re-run `一键部署.cmd` to re-detect |
 
-## 发布到 GitHub
+## Roadmap
 
-```bash
-# 1. 安装 GitHub CLI(如未安装)
-winget install --id GitHub.cli
-
-# 2. 登录
-gh auth login
-
-# 3. 创建并推送仓库(已在 dsh-remote 目录)
-cd dsh-remote
-git init
-git add .
-git commit -m "DeepSeek Harness phone remote access + persistent file plugin"
-gh repo create dsh-phone-remote --public --source=. --push
-```
-
-发布前确认 `.gitignore` 生效(忽略 `*.log`、`.remfs-roots.json`、`*.pid`、`node_modules/`),仓库内不含任何真实 Tailscale IP、域名或本机路径(部署脚本使用占位符与自动探测)。
+- [x] Tailscale HTTPS + forwarder access
+- [x] Persistent plugin (no per-session run)
+- [x] Bilingual UI (EN / 中文)
+- [x] Host-enforced protected-path deny list
+- [ ] More device resolutions validation
+- [ ] Tailscale ACL hardening guide
+- [ ] English README polish / screenshots
 
 ## License
 
