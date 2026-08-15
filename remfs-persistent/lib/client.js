@@ -140,7 +140,14 @@ window.__ModuleLoader__.load({
         sidebarOpen: '收起侧边栏', sidebarClosed: '展开侧边栏',
         headerNew: '＋ 新会话',
         slotLabel: '新会话', slotPageLabel: '＋ 新会话 / 文件浏览',
-        otherLang: 'EN'
+        otherLang: 'EN',
+        pairTitle: '设备配对', pairHint: '在电脑上打开 %USERPROFILE%\\.dsh\\remfs-pairing.txt 获取配对码(一次性,10 分钟有效)',
+        pairCode: '配对码', deviceName: '设备名称', pairBtn: '配对', pairingBtn: '配对中…',
+        pairedToast: '✅ 配对成功', pairFailed: '配对失败',
+        devicesTitle: '已配对设备', revokeBtn: '吊销', revokeAllBtn: '吊销全部',
+        revokedToast: '✅ 已吊销', noDevices: '暂无设备', devMgmt: '🔐 设备管理',
+        rootOutside: '新增目录必须在已批准目录内——在电脑上编辑 .remfs-roots.json 添加新位置',
+        authFailed: '设备未授权,请重新配对'
       },
       en: {
         tabSession: '＋ New Session', tabFiles: '📁 Files',
@@ -166,7 +173,14 @@ window.__ModuleLoader__.load({
         sidebarOpen: 'Collapse sidebar', sidebarClosed: 'Expand sidebar',
         headerNew: '＋ New Session',
         slotLabel: 'New Session', slotPageLabel: '＋ New Session / Files',
-        otherLang: '中'
+        otherLang: '中',
+        pairTitle: 'Device pairing', pairHint: 'Open %USERPROFILE%\\.dsh\\remfs-pairing.txt on the PC and enter the code (one-time, valid 10 min)',
+        pairCode: 'Pairing code', deviceName: 'Device name', pairBtn: 'Pair', pairingBtn: 'Pairing…',
+        pairedToast: '✅ Paired', pairFailed: 'Pairing failed',
+        devicesTitle: 'Paired devices', revokeBtn: 'Revoke', revokeAllBtn: 'Revoke all',
+        revokedToast: '✅ Revoked', noDevices: 'No devices', devMgmt: '🔐 Devices',
+        rootOutside: 'New roots must stay inside approved roots — edit .remfs-roots.json on the PC to add new locations',
+        authFailed: 'Device not authorized — please pair again'
       }
     }
 
@@ -193,8 +207,31 @@ window.__ModuleLoader__.load({
     }
     const subscribeLang = (fn) => { langListeners.add(fn); return () => langListeners.delete(fn) }
 
-    const friendlyErr = (msg) => {
+    // ── device auth ──────────────────────────────────────────────────────────
+    const getCred = () => {
+      try {
+        const id = window.localStorage.getItem('remfs-device-id')
+        const cred = window.localStorage.getItem('remfs-device-credential')
+        return (id && cred) ? { deviceId: id, credential: cred } : null
+      } catch { return null }
+    }
+    const saveCred = (deviceId, credential) => {
+      try {
+        window.localStorage.setItem('remfs-device-id', deviceId)
+        window.localStorage.setItem('remfs-device-credential', credential)
+      } catch { /* ignore */ }
+    }
+    const clearCred = () => {
+      try {
+        window.localStorage.removeItem('remfs-device-id')
+        window.localStorage.removeItem('remfs-device-credential')
+      } catch { /* ignore */ }
+    }
+
+    const friendlyErr = (msg, code) => {
       const s = String(msg || '')
+      if (code === 'root-outside-approved') return { lock: false, text: t('rootOutside') }
+      if (code === 'auth-required' || code === 'auth-invalid') return { lock: true, text: t('authFailed') }
       if (/denied|EACCES|EPERM/i.test(s)) return { lock: true, text: t('lockDenied') }
       if (/allowed|范围|outside/i.test(s)) return { lock: true, text: t('outside') }
       return { lock: false, text: s }
@@ -220,8 +257,71 @@ window.__ModuleLoader__.load({
       const [moreOpen, setMoreOpen] = React.useState(false)
       const [, forceLang] = React.useState(0)
       React.useEffect(() => subscribeLang(() => forceLang((n) => n + 1)), [])
+      const [cred, setCredState] = React.useState(() => getCred())
+      const [pairCode, setPairCode] = React.useState('')
+      const [deviceName, setDeviceName] = React.useState('')
+      const [pairing, setPairing] = React.useState(false)
+      const [devicesOpen, setDevicesOpen] = React.useState(false)
+      const [devices, setDevices] = React.useState([])
 
-      const rpc = (method, payload) => conn.rpc.call('/remfs', method, payload)
+      const rpc = (method, payload) => {
+        const c = getCred()
+        return conn.rpc.call('/remfs', method, Object.assign({}, payload, c || {}))
+      }
+
+      // Returns true when the response signals an auth problem (pairing UI shows).
+      const noteAuth = (r) => {
+        if (r && !r.ok && r.error && (r.error.code === 'auth-required' || r.error.code === 'auth-invalid')) {
+          clearCred()
+          setCredState(null)
+          setError({ lock: true, text: t('authFailed') })
+          return true
+        }
+        return false
+      }
+
+      const doPair = () => {
+        if (!pairCode.trim() || pairing) return
+        setPairing(true); setError(null)
+        rpc('pair', { code: pairCode, deviceName: deviceName || 'phone' }).then((r) => {
+          if (r && r.ok && r.value && r.value.deviceId && r.value.credential) {
+            saveCred(r.value.deviceId, r.value.credential)
+            setCredState(getCred())
+            setPairCode(''); setDeviceName('')
+            showToast(t('pairedToast'), 'success')
+            refresh(null)
+          } else {
+            const fe = friendlyErr((r && r.error && r.error.message) || t('pairFailed'), r && r.error && r.error.code)
+            setError(fe)
+            showToast('❌ ' + fe.text, 'error')
+          }
+        }).catch((e) => {
+          const fe = friendlyErr(String(e))
+          setError(fe)
+          showToast('❌ ' + fe.text, 'error')
+        }).then(() => setPairing(false))
+      }
+
+      const loadDevices = () => {
+        rpc('devices', {}).then((r) => {
+          if (r && r.ok) setDevices((r.value && r.value.devices) || [])
+          else if (noteAuth(r)) { /* pairing UI */ }
+        }).catch(() => {})
+      }
+
+      const doRevoke = (id) => {
+        rpc('revoke', { id }).then((r) => {
+          if (r && r.ok) { showToast(t('revokedToast'), 'success'); loadDevices() }
+          else if (noteAuth(r)) { /* pairing UI */ }
+        }).catch(() => {})
+      }
+
+      const doRevokeAll = () => {
+        rpc('revokeAll', {}).then((r) => {
+          if (r && r.ok) { showToast(t('revokedToast'), 'success'); loadDevices() }
+          else if (noteAuth(r)) { /* pairing UI */ }
+        }).catch(() => {})
+      }
 
       const load = (p, fallback) => {
         setLoading(true); setError(null); setPreview(null); setEditing(null)
@@ -234,7 +334,8 @@ window.__ModuleLoader__.load({
             setEntries(d.entries || [])
             setInputPath(d.path || '')
           } else {
-            const fe = friendlyErr((r && r.error && r.error.message) || 'load failed')
+            if (noteAuth(r)) return
+            const fe = friendlyErr((r && r.error && r.error.message) || 'load failed', r && r.error && r.error.code)
             if (fe.lock && fallback) { load(fallback, null) }
             else setError(fe)
           }
@@ -243,6 +344,7 @@ window.__ModuleLoader__.load({
 
       const refresh = (target) => {
         rpc('allowed', {}).then((r) => {
+          if (noteAuth(r)) return
           const d = (r && r.value) || {}
           if (r && r.ok && Array.isArray(d.allowed) && d.allowed.length > 0) {
             setAllowed(d.allowed)
@@ -250,6 +352,7 @@ window.__ModuleLoader__.load({
           }
         }).catch(() => {})
         rpc('workspaces', {}).then((r) => {
+          if (noteAuth(r)) return
           if (r && r.ok) setWsList((r.value && r.value.workspaces) || [])
         }).catch(() => {})
       }
@@ -260,7 +363,10 @@ window.__ModuleLoader__.load({
         setPreview(null); setError(null)
         rpc('read', { path: join(path, name) }).then((r) => {
           if (r && r.ok) setPreview(Object.assign({ name }, (r && r.value) || {}))
-          else setError(friendlyErr((r && r.error && r.error.message) || 'read failed'))
+          else {
+            if (noteAuth(r)) return
+            setError(friendlyErr((r && r.error && r.error.message) || 'read failed', r && r.error && r.error.code))
+          }
         }).catch((e) => setError(friendlyErr(String(e))))
       }
 
@@ -270,7 +376,10 @@ window.__ModuleLoader__.load({
           if (r && r.ok) {
             setEditing(null); setPreview(null); load(path)
             showToast(t('savedToast') + editing.name, 'success')
-          } else setError(friendlyErr((r && r.error && r.error.message) || 'save failed'))
+          } else {
+            if (noteAuth(r)) return
+            setError(friendlyErr((r && r.error && r.error.message) || 'save failed', r && r.error && r.error.code))
+          }
         }).catch((e) => setError(friendlyErr(String(e))))
       }
 
@@ -279,7 +388,10 @@ window.__ModuleLoader__.load({
         file.text().then((text) => {
           rpc('write', { path: join(path, file.name), content: text }).then((r) => {
             if (r && r.ok) { load(path); showToast(t('uploadedToast') + file.name, 'success') }
-            else setError(friendlyErr((r && r.error && r.error.message) || 'upload failed'))
+            else {
+              if (noteAuth(r)) return
+              setError(friendlyErr((r && r.error && r.error.message) || 'upload failed', r && r.error && r.error.code))
+            }
           }).catch((e) => setError(friendlyErr(String(e))))
         }).catch((e) => setError(friendlyErr(String(e))))
       }
@@ -312,7 +424,8 @@ window.__ModuleLoader__.load({
               showToast('❌ ' + fe.text, 'error')
             })
           }
-          const fe = friendlyErr((r && r.error && r.error.message) || 'failed')
+          if (noteAuth(r)) { setBusy(false); return }
+          const fe = friendlyErr((r && r.error && r.error.message) || 'failed', r && r.error && r.error.code)
           setError(fe)
           showToast('❌ ' + fe.text, 'error')
         }).catch((e) => {
@@ -341,7 +454,8 @@ window.__ModuleLoader__.load({
             showToast(t('rootsSaved', { n: roots.length }), 'success')
             refresh(null)
           } else {
-            setError(friendlyErr((r && r.error && r.error.message) || 'save failed'))
+            if (noteAuth(r)) return
+            setError(friendlyErr((r && r.error && r.error.message) || 'save failed', r && r.error && r.error.code))
             showToast(t('saveFailed'), 'error')
           }
         }).catch((e) => {
@@ -411,7 +525,22 @@ window.__ModuleLoader__.load({
           React.createElement('input', { type: 'checkbox', checked: hideSystem, onChange: (e) => setHideSystem(e.target.checked) }),
           t('hideSystem')
         ),
-        React.createElement('button', { className: 'remfs-manage', onClick: () => { setMoreOpen(false); setManaging(true); setManageText(allowed.join('\n')) } }, t('manageRoots'))
+        React.createElement('button', { className: 'remfs-manage', onClick: () => { setMoreOpen(false); setManaging(true); setManageText(allowed.join('\n')) } }, t('manageRoots')),
+        React.createElement('button', { className: 'remfs-manage', onClick: () => { setMoreOpen(false); setDevicesOpen(true); loadDevices() } }, t('devMgmt'))
+      ) : null
+
+      const devicesPane = devicesOpen ? React.createElement('div', { className: 'remfs-manager' },
+        React.createElement('div', null, t('devicesTitle')),
+        devices.length === 0 ? React.createElement('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#999)' } }, t('noDevices')) :
+        devices.map((d) => React.createElement('div', { key: d.id, style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 } },
+          React.createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, d.name),
+          React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary,#999)' } }, new Date(d.lastSeen).toLocaleString()),
+          React.createElement('button', { className: 'remfs-btn', onClick: () => doRevoke(d.id) }, t('revokeBtn'))
+        )),
+        React.createElement('div', { className: 'remfs-tools' },
+          React.createElement('button', { className: 'remfs-btn', onClick: () => { setDevicesOpen(false); setMoreOpen(true) } }, t('cancel')),
+          React.createElement('button', { className: 'remfs-btn', style: { color: '#e06c6c' }, onClick: doRevokeAll }, t('revokeAllBtn'))
+        )
       ) : null
 
       const errLine = error ? React.createElement('div', { className: 'remfs-err' + (error.lock ? ' lock' : '') }, error.text) : null
@@ -440,12 +569,14 @@ window.__ModuleLoader__.load({
       )
 
       const filesBody = React.createElement(React.Fragment, null,
-        rootsRow(true),
-        moreMenu,
-        navBar,
-        errLine,
-        listRows,
-        editing ? React.createElement('div', { className: 'remfs-prev' },
+        devicesOpen ? devicesPane :
+        React.createElement(React.Fragment, null,
+          rootsRow(true),
+          moreMenu,
+          navBar,
+          errLine,
+          listRows,
+          editing ? React.createElement('div', { className: 'remfs-prev' },
           React.createElement('div', null, t('editPrefix') + editing.name),
           React.createElement('textarea', { value: editText, onChange: (e) => setEditText(e.target.value), style: { minHeight: 140, fontFamily: 'monospace', fontSize: 12, width: '100%', boxSizing: 'border-box', background: 'rgba(0,0,0,.2)', color: 'inherit', border: '1px solid rgba(128,128,128,.3)', borderRadius: 6 } }),
           React.createElement('div', { className: 'remfs-tools' },
@@ -474,7 +605,26 @@ window.__ModuleLoader__.load({
             React.createElement('input', { type: 'file', accept: '.txt,.md,.json,.js,.ts,.tsx,.py,.html,.css,.yaml,.yml,.csv,.log,.xml,.sh,.ps1,.ini,.env', style: { display: 'none' }, onChange: (e) => { if (e.target.files && e.target.files[0]) upload(e.target.files[0]); e.target.value = '' } })
           )
         )
+        )
       )
+
+      if (!cred) {
+        return React.createElement('div', { className: embedded ? 'remfs-block' : 'remfs-panel' },
+          React.createElement('div', { className: 'remfs-head' },
+            React.createElement('b', null, t('pairTitle')),
+            React.createElement('span', { className: 'p' }, ''),
+            React.createElement('button', { className: 'remfs-btn', title: lang === 'zh' ? 'English' : '中文', onClick: toggleLang }, t('otherLang')),
+            React.createElement('button', { className: 'remfs-btn remfs-close', onClick: onClose }, t('close'))
+          ),
+          React.createElement('div', { className: 'remfs-body', style: { padding: 12, display: 'flex', flexDirection: 'column', gap: 10 } },
+            React.createElement('span', { style: { fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary,#999)' } }, t('pairHint')),
+            errLine,
+            React.createElement('input', { value: pairCode, onChange: (e) => setPairCode(e.target.value), placeholder: t('pairCode'), style: { background: 'rgba(128,128,128,.15)', border: '1px solid rgba(128,128,128,.3)', borderRadius: 6, color: 'inherit', padding: '9px 10px', fontSize: 15, fontFamily: 'monospace', letterSpacing: 1 } }),
+            React.createElement('input', { value: deviceName, onChange: (e) => setDeviceName(e.target.value), placeholder: t('deviceName'), style: { background: 'rgba(128,128,128,.15)', border: '1px solid rgba(128,128,128,.3)', borderRadius: 6, color: 'inherit', padding: '9px 10px', fontSize: 14 } }),
+            React.createElement('button', { className: 'remfs-wsbtn', disabled: pairing || !pairCode.trim(), onClick: doPair }, pairing ? t('pairingBtn') : t('pairBtn'))
+          )
+        )
+      }
 
       return React.createElement('div', { className: embedded ? 'remfs-block' : 'remfs-panel' },
         React.createElement('div', { className: 'remfs-head' },
