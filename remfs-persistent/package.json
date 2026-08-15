@@ -1,0 +1,18 @@
+{
+  "name": "@zeta/remfs-persistent",
+  "version": "0.1.0",
+  "description": "Persistent phone remote workbench: new session / workspace + file browsing over a custom RPC channel.",
+  "type": "module",
+  "main": "lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  }
+}

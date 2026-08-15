@@ -1,0 +1,19 @@
+# logs
+*.log
+launcher/
+
+# temp / probes
+*.png
+_*.json
+phone_*.js
+composer_*.js
+
+# runtime state / sensitive-ish
+.remfs-roots.json
+*.pid
+keep_awake.pid
+
+# system
+.DS_Store
+Thumbs.db
+node_modules/
