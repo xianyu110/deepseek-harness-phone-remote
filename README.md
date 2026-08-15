@@ -16,13 +16,27 @@ Control your **DeepSeek Harness Web GUI from your phone** over **Tailscale**, wi
 
 - **One-click deploy** — `install.ps1` auto-detects Tailscale IP / MagicDNS name, writes `start_harness.ps1`, enables `tailscale serve` (HTTPS), installs the persistent plugin.
 - **Auto-start on login** — harness + forwarder + keep-awake start automatically.
-- **Phone file workbench**:
-  - *Session tab*: list existing workspaces and open one, or "start a session here" in any folder;
-  - *Files tab*: browse, breadcrumbs, text preview / edit / download, upload, image preview;
-  - Manageable allowed-roots allowlist (default `Documents`);
-  - Mobile-adapted: collapsible sidebar button, draggable floating ball, toast feedback.
 - **Persistent plugin** — `remfs-persistent` is a loader entry: host RPC channel `/remfs` registers at harness start; the client module is served on every page. No re-running after refresh.
 - **Bilingual UI** — English / 中文 (auto-detects browser language, toggle in the workbench header, remembered).
+
+### Mobile-first UI (optimized for phone screens)
+
+- **Auto-collapsed sidebar** — on small screens the harness sidebar/details panels collapse and the conversation gets full width; a floating **☰** ball re-expands the sidebar (tap again to collapse). The ball is **draggable** anywhere on screen for one-handed use.
+- **Two-tab workbench** — `＋ New Session` / `📁 Files` in one panel, opened from the session header or Settings.
+- **Breadcrumb navigation** — tap any path segment to jump; plus a direct absolute-path input with a Go button (the phone cannot open the OS directory picker, so this is the way in).
+- **Toast feedback** — every action (save / upload / session start / errors) confirms with a top toast.
+- **★ workspace badges** — folders that are registered workspaces are flagged in file lists, and the header shows a badge when the current folder is a workspace.
+- **Files dimmed in the Session tab** — tapping a file auto-switches to the Files tab and previews it, so the Session tab stays focused on folders.
+- **Hide system dirs** — system-protected dirs are hidden by default with a toggle in the ⋯ menu.
+- **Responsive CSS** — side panels collapse at ≤700px; the workbench panel fits narrow screens.
+
+### Read & manage PC local files from the phone
+
+- **Browse** allowlisted roots (default `Documents`) with breadcrumbs.
+- **Preview** text and images inline; **download** binary files (5 MB cap).
+- **Edit** text files and save back to the PC.
+- **Upload** text files from the phone into any allowed folder.
+- **Protected paths** — system dirs, credential/key files (`.credentials.yaml`, `.ssh`, `id_rsa`, `*.pem`, …) and private data dirs (WeChat/WPS data) are hard-blocked host-side regardless of the allowlist (see Security).
 
 ## Architecture
 
