@@ -151,6 +151,10 @@ dsh-remote/
 | HTTPS certificate error | Enable HTTPS Certificates in the tailnet admin, then re-run install.ps1 |
 | Some folders not browsable on phone | Not in the allowlist (add via "manage allowed dirs"); system/credential/private dirs are hard-blocked |
 | Plugin missing after refresh | Refresh again — the persistent module loads with every page (no "run" needed) |
+| Plugin never appears after `dsh plugin add` | You must also append the loader row to `cordis.patch.yml` (`dsh plugin add` only installs the dependency) and restart `dsh web` |
+| Workbench button missing | Open a conversation first — the header button lives in the session header; it also appears under Settings |
+| `npm.ps1` blocked by execution policy | Use `npm.cmd` instead, or `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| `npm view` 404s right after a publish | CDN edge cache — wait a minute or query with `Cache-Control: no-cache`; the publish itself succeeded (PUT 200) |
 | Launch fails after a dsh upgrade | The npx cache path changed — re-run `一键部署.cmd` to re-detect |
 
 ## Roadmap

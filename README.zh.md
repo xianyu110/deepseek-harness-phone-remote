@@ -151,6 +151,10 @@ dsh-remote/
 | HTTPS 证书报错 | tailnet 后台开启 HTTPS Certificates 后重跑 install.ps1 |
 | 手机端无法浏览某些目录 | 该目录不在白名单(可"管理可访问目录"添加);系统/凭据/隐私目录被保护路径硬性拦截 |
 | 会话没反应/插件不见了 | 刷新页面(持久插件随页面自动加载,无需重新运行) |
+| `dsh plugin add` 后插件没出现 | 必须**手动补 loader 行**到 `cordis.patch.yml`(`dsh plugin add` 只装依赖)并重启 `dsh web` |
+| 工作台按钮不显示 | 先打开一个会话——按钮在会话头部;设置页里也有 |
+| `npm.ps1` 被执行策略拦截 | 改用 `npm.cmd`,或执行一次 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| 刚发布完 `npm view` 显示 404 | CDN 边缘缓存——等一分钟或用 `Cache-Control: no-cache` 查询;发布本身已成功(PUT 200) |
 | 升级 dsh 后启动失败 | npx 缓存路径变化,重跑一次 `一键部署.cmd` 重新探测 |
 
 ## Roadmap
