@@ -1,13 +1,31 @@
 {
-  "name": "@zeta/remfs-persistent",
-  "version": "0.1.0",
-  "description": "Persistent phone remote workbench: new session / workspace + file browsing over a custom RPC channel.",
+  "name": "@zetaluolang/remfs-persistent",
+  "version": "1.0.0",
+  "description": "Persistent phone remote workbench for DeepSeek Harness: start sessions / manage workspaces and browse, preview, edit, download, upload PC files from your phone over a trusted RPC channel.",
+  "license": "MIT",
   "type": "module",
   "main": "lib/host.js",
+  "files": [
+    "lib"
+  ],
   "exports": {
     ".": "./lib/host.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "tailscale",
+    "phone",
+    "remote",
+    "file-manager",
+    "workspace",
+    "cordis"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zetaluolang-cyber/deepseek-harness-phone-remote.git"
   },
   "dsh": {
     "client": {

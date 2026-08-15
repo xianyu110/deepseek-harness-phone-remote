@@ -2,7 +2,7 @@
 // Loaded on every page via the dsh.client module table (no per-session run needed).
 // RPC goes through ctx.connection.rpc.call('/remfs', method, payload).
 window.__ModuleLoader__.load({
-  id: '@zeta/remfs-persistent',
+  id: '@zetaluolang/remfs-persistent',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports

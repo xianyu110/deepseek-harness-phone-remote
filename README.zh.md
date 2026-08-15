@@ -74,6 +74,25 @@ PC(仅监听本机 + tailnet,不监听 0.0.0.0)
 | HTTPS Certificates | tailnet 后台开启:https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
 | DeepSeek Harness | `npx dsh web` 启动过一次(用于生成 npx 缓存路径) |
 
+## 从 npm 安装
+
+插件已发布到 npm:**[@zetaluolang/remfs-persistent](https://www.npmjs.com/package/@zetaluolang/remfs-persistent)**。如果已有 `dsh web` profile:
+
+```bash
+# 1. 把包装进 web profile
+dsh plugin --profile web add @zetaluolang/remfs-persistent
+
+# 2. 注册 loader 行(追加到 %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml)
+# - insert:
+#     - id: remfs-persistent
+#       name: '@zetaluolang/remfs-persistent'
+#       inject: [connection, fs]
+
+# 3. 重启 dsh web,打开 GUI——工作台出现在会话头部
+```
+
+或者直接用下面的一键部署,全自动完成。
+
 ## 一键部署
 
 1. 在 PC 上双击 **`一键部署.cmd`**(或右键以管理员运行,便于读取 Tailscale IP / 配置 Serve);
@@ -90,7 +109,7 @@ PC(仅监听本机 + tailnet,不监听 0.0.0.0)
 - 自动定位 npx 缓存中的 `dsh` 入口(`_npx` 哈希目录会随安装变化,不写死);
 - `tailscale serve --bg http://127.0.0.1:3080` 开启 HTTPS;
 - 把 `remfs-persistent`(host RPC 通道 + 浏览器模块)装入 web profile:
-  - 源码 → `profiles\web\vendor\remfs-persistent\`,并链接/复制到 `node_modules\@zeta\remfs-persistent`;
+  - 源码 → `profiles\web\vendor\remfs-persistent\`,并链接/复制到 `node_modules\@zetaluolang\remfs-persistent`;
   - 幂等写入 `profiles\web\cordis.patch.yml` 的 loader 条目(含 `inject: [connection, fs]`);
 - 脚本统一安装到 `%USERPROFILE%\.dsh\launcher\`(**不在 Documents 内**,见安全章节)。
 

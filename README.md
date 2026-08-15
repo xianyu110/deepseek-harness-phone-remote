@@ -74,6 +74,25 @@ Layout is fluid (CSS grid / clamp-friendly), but we are validating other resolut
 | HTTPS Certificates | tailnet admin: https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
 | DeepSeek Harness | run `npx dsh web` once (to populate the npx cache) |
 
+## Install from npm
+
+The plugin is published on npm as **[@zetaluolang/remfs-persistent](https://www.npmjs.com/package/@zetaluolang/remfs-persistent)**. If you already have a `dsh web` profile:
+
+```bash
+# 1. install the package into the web profile
+dsh plugin --profile web add @zetaluolang/remfs-persistent
+
+# 2. register it as a loader row (append to %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml)
+# - insert:
+#     - id: remfs-persistent
+#       name: '@zetaluolang/remfs-persistent'
+#       inject: [connection, fs]
+
+# 3. restart dsh web, then open the GUI — the workbench appears in the session header
+```
+
+Or use the one-click deploy below, which does all of this automatically.
+
 ## Quick start
 
 1. Double-click **`一键部署.cmd`** on the PC (right-click → Run as administrator if Tailscale IP detection or Serve setup needs it);
@@ -90,7 +109,7 @@ Layout is fluid (CSS grid / clamp-friendly), but we are validating other resolut
 - Auto-locates the `dsh` entry in the npx cache (the `_npx` hash dir changes between installs — never hardcoded);
 - `tailscale serve --bg http://127.0.0.1:3080` → HTTPS;
 - Installs `remfs-persistent` (host RPC channel + browser module) into the web profile:
-  - source → `profiles\web\vendor\remfs-persistent\`, linked/copied to `node_modules\@zeta\remfs-persistent`;
+  - source → `profiles\web\vendor\remfs-persistent\`, linked/copied to `node_modules\@zetaluolang\remfs-persistent`;
   - idempotently writes the loader entry into `profiles\web\cordis.patch.yml` (with `inject: [connection, fs]`);
 - Scripts are installed to `%USERPROFILE%\.dsh\launcher\` (**not inside Documents** — see Security).
 

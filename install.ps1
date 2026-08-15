@@ -102,7 +102,7 @@ if ((Test-Path $profileDir) -and (Test-Path $pkgSrc)) {
     Copy-Item (Join-Path $pkgSrc "lib\client.js") (Join-Path $pkgDst "lib\client.js") -Force
 
     # Link (or copy) into the profile node_modules so the loader can resolve it.
-    $nmPkg = Join-Path $profileDir "node_modules\@zeta\remfs-persistent"
+    $nmPkg = Join-Path $profileDir "node_modules\@zetaluolang\remfs-persistent"
     New-Item -ItemType Directory -Force -Path (Split-Path $nmPkg) | Out-Null
     if (-not (Test-Path $nmPkg)) {
         New-Item -ItemType Junction -Path $nmPkg -Target $pkgDst -ErrorAction SilentlyContinue | Out-Null
@@ -114,7 +114,7 @@ if ((Test-Path $profileDir) -and (Test-Path $pkgSrc)) {
     # Ensure the loader patch row exists (idempotent).
     $patch = Join-Path $profileDir "cordis.patch.yml"
     if (-not (Test-Path $patch) -or -not (Select-String -Path $patch -Pattern "remfs-persistent" -Quiet)) {
-        Add-Content -Path $patch -Value "`n- insert:`n    - id: remfs-persistent`n      name: '@zeta/remfs-persistent'`n      inject: [connection, fs]`n" -Encoding ascii
+        Add-Content -Path $patch -Value "`n- insert:`n    - id: remfs-persistent`n      name: '@zetaluolang/remfs-persistent'`n      inject: [connection, fs]`n" -Encoding ascii
     }
     Write-Host "[OK] persistent plugin installed into the web profile"
 } else {
