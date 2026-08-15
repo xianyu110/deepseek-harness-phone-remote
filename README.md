@@ -60,10 +60,24 @@ PC (listens on loopback + tailnet only, never 0.0.0.0)
 
 | Device | Screen | Status |
 |---|---|---|
-| OPPO Find X8 Ultra | ~1440×3168 | ✅ primary test device |
-| More devices / resolutions | — | 🚧 planned |
+| OPPO Find X8 Ultra | ~1440×3168 | ✅ primary test device (real hardware) |
+| iPhone 16 Pro / SE, Pixel 8, Galaxy S24, Redmi Note, iPad Air, iPhone landscape | emulated | ✅ layout verified |
 
-Layout is fluid (CSS grid / clamp-friendly), but we are validating other resolutions — feel free to open an issue with your device model + screen size and any layout problem you see.
+### Emulated device matrix (headless Chromium, current build)
+
+| Device | Screen | Sidebar | ☰ ball | Workbench panel | Overflow |
+|---|---|---|---|---|---|
+| iPhone 16 Pro | 402×874 | collapsed | shown | 386px (96vw) | none |
+| iPhone SE (small) | 375×667 | collapsed | shown | 360px (96vw) | none |
+| Pixel 8 | 412×915 | collapsed | shown | 396px (96vw) | none |
+| Galaxy S24 | 360×780 | collapsed | shown | 346px (96vw) | none |
+| Redmi Note (small Android) | 360×640 | collapsed | shown | 346px (96vw) | none |
+| iPad Air (tablet) | 820×1180 | 56px rail | hidden | 430px (cap) | none |
+| iPhone 16 Pro (landscape) | 874×402 | 56px rail | hidden | 430px (cap) | none |
+
+Screenshots: [`docs/device-tests/`](docs/device-tests/)
+
+Layout is fluid (CSS grid / clamp-friendly) — phones collapse the sidebar and use the floating ☰ ball; tablets/landscape keep the 56px rail. Real-device testing on more models is planned — open an issue with your device model + screen size and any layout problem you see.
 
 ## Requirements
 

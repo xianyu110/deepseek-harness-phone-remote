@@ -4,6 +4,8 @@ launcher/
 
 # temp / probes
 *.png
+!docs/device-tests/
+!docs/device-tests/*.png
 _*.json
 phone_*.js
 composer_*.js
