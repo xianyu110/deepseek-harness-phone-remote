@@ -62,4 +62,17 @@ if (Get-Command Stop-OwnedKeepAwake -ErrorAction SilentlyContinue) {
     }
 }
 
+# 3. Tailscale Serve mapping: disable ONLY this project's mapping. Tailscale
+#    Serve --bg persists until explicitly disabled and resumes after reboot -
+#    if we left it active, a foreign process that later binds localhost:3080
+#    could be proxied into the tailnet. We never wipe the whole serve config
+#    (that would destroy unrelated user mappings).
+if (Get-Command Disable-OwnedServe -ErrorAction SilentlyContinue) {
+    if (Disable-OwnedServe) {
+        Write-Host "Tailscale Serve mapping (this project) disabled."
+    } else {
+        Write-Host "Tailscale Serve mapping: not ours or already disabled (nothing to do)."
+    }
+}
+
 Write-Host "Owned Harness, forwarder and keep_awake stopped. Tailscale is still up."

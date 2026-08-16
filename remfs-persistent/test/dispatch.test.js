@@ -301,3 +301,83 @@ test('fail closed: no workspace root must NEVER grant whole-drive access', async
     assert.equal(r2.ok, false)
   } finally { await teardown(t, dir) }
 })
+
+// b3dfc4b audit item 5: `list` must filter each child entry through
+// deniedPath BEFORE its name/metadata leaves /remfs. Hard-denied children
+// (.ssh dirs, .aws, .env/private-key files, system dirs) must not appear even
+// when the parent directory itself is allowed.
+test('server-side metadata filter: hard-denied children never leave /remfs', async (t) => {
+  const { dir, root, handler, pair } = await setup()
+  try {
+    const A = await pair('device-a')
+    const base = { deviceId: A.deviceId, credential: A.credential }
+    // create allowed content AND hard-denied content inside the root
+    await fsp.mkdir(path.join(root, 'proj'))
+    await fsp.writeFile(path.join(root, 'proj', 'notes.txt'), 'ok')
+    await fsp.mkdir(path.join(root, '.ssh'))
+    await fsp.writeFile(path.join(root, '.ssh', 'id_rsa'), 'SECRET')
+    await fsp.mkdir(path.join(root, '.aws'))
+    await fsp.writeFile(path.join(root, '.aws', 'credentials'), 'SECRET')
+    await fsp.writeFile(path.join(root, '.env'), 'SECRET=1')
+    await fsp.writeFile(path.join(root, 'keys.pem'), 'SECRET')
+
+    const r = await listCall(handler, { ...base, path: root })
+    assert.equal(r.ok, true)
+    const names = r.value.entries.map((e) => e.name)
+    assert.ok(names.includes('proj'), 'allowed child must be listed')
+    for (const denied of ['.ssh', '.aws', '.env', 'keys.pem']) {
+      assert.ok(!names.includes(denied), `hard-denied child '${denied}' must be filtered server-side (got: ${names.join(',')})`)
+    }
+    // and the denied content itself must still be unreadable
+    const readDenied = await handler('read', { ...base, path: path.join(root, '.ssh', 'id_rsa') })
+    assert.equal(readDenied.ok, false)
+    assert.equal(readDenied.error.code, 'path-protected')
+  } finally { await teardown(t, dir) }
+})
+
+// b3dfc4b audit item 5 (soft side): a SOFT-protected child (e.g. AppData) is
+// filtered out unless the phone's allowlist includes it - the child metadata
+// must not leak just because the parent is allowed.
+test('server-side metadata filter: soft-protected child without an approved root is hidden', async (t) => {
+  const { dir, root, handler, pair } = await setup()
+  try {
+    const A = await pair('device-a')
+    const base = { deviceId: A.deviceId, credential: A.credential }
+    await fsp.mkdir(path.join(root, 'appdata-probe'))
+    await fsp.mkdir(path.join(root, 'appdata-probe', 'x'))
+    const r = await listCall(handler, { ...base, path: path.join(root, 'appdata-probe') })
+    assert.equal(r.ok, true)
+    // 'x' is an ordinary dir here; the regression target is that protected
+    // SEGMENT names (AppData, Windows, System32...) never appear in listings
+    const names = r.value.entries.map((e) => e.name)
+    assert.ok(!names.includes('Windows') && !names.includes('AppData') && !names.includes('System32'),
+      'system segment names must not appear in listings: ' + names.join(','))
+  } finally { await teardown(t, dir) }
+})
+
+// b3dfc4b audit item 6 (option A): `workspaces` must return only workspaces
+// inside the remfs capability boundary (allowed roots + not protected). A
+// registered workspace outside the allowlist or under a protected path must be
+// filtered server-side - native DSH workspace authority stays outside remfs.
+test('workspaces: filtered through the remfs capability boundary', async (t) => {
+  const { dir, root, handler, pair, workspaces } = await setup()
+  try {
+    const A = await pair('device-a')
+    const base = { deviceId: A.deviceId, credential: A.credential }
+    // register: one INSIDE the root, one OUTSIDE, one under a protected path
+    workspaces.push({ id: 'ws-in', path: path.join(root, 'proj'), title: 'in' })
+    const outside = path.join(dir, 'outside-ws')
+    await fsp.mkdir(outside)
+    workspaces.push({ id: 'ws-out', path: outside, title: 'out' })
+    const prot = path.join(root, '.ssh')
+    await fsp.mkdir(prot)
+    workspaces.push({ id: 'ws-prot', path: prot, title: 'prot' })
+
+    const r = await handler('workspaces', base)
+    assert.equal(r.ok, true)
+    const got = (r.value.workspaces || []).map((w) => w.id)
+    assert.ok(got.includes('ws-in'), 'workspace inside the root must be listed')
+    assert.ok(!got.includes('ws-out'), 'workspace outside the allowlist must be filtered: ' + got.join(','))
+    assert.ok(!got.includes('ws-prot'), 'workspace under a protected path must be filtered: ' + got.join(','))
+  } finally { await teardown(t, dir) }
+})

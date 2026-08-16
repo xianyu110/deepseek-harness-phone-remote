@@ -122,6 +122,13 @@ Write-Host "[OK] MagicDNS name: $tsName"
 # ---------- 3. write runtime files ----------
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ws  = Join-Path $env:USERPROFILE "Documents"
+# Shared helpers (Set-RemfsPatchRow, Get-VersionKey, ...) - single source of
+# truth for the installer and the CI integration tests.
+$commonHelper = Join-Path $src "harness-common.ps1"
+if (Test-Path $commonHelper) { . $commonHelper }
+if (-not (Get-Command Get-VersionKey -ErrorAction SilentlyContinue)) {
+    Write-Host "[!] harness-common.ps1 missing Get-VersionKey - dsh resolution will use a fallback." -ForegroundColor Yellow
+}
 # Runtime scripts live OUTSIDE Documents so the phone file plugin can never
 # rewrite its own launcher (Documents is the default allowed root).
 $scriptDir = Join-Path $env:USERPROFILE ".dsh\launcher"
@@ -161,19 +168,6 @@ if (Test-Path $template) {
         }
         return $list
     }
-    function Get-VersionKey([string]$v) {
-        # "0.1.0-rc.6" -> "00000001.00000000.00000000.99999999.00000006" so that
-        # prereleases sort below the final release of the same major.minor.patch.
-        $m = [regex]::Match($v, '^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$')
-        if (-not $m.Success) { return '0.0.0.0.0' }
-        $core = $m.Groups[1].Value + '.' + $m.Groups[2].Value + '.' + $m.Groups[3].Value
-        if (-not $m.Groups[4].Success) { return $core + '.99999999.0' }
-        $pre = $m.Groups[4].Value
-        $preNum = 0
-        $pn = [regex]::Match($pre, '(\d+)$')
-        if ($pn.Success) { $preNum = [int]$pn.Groups[1].Value }
-        return $core + '.0.' + $preNum.ToString('D8')
-    }
     $dshBin = ""
     $dshVersion = ""
     $cands = Get-DshCandidates
@@ -209,6 +203,12 @@ if (Test-Path $template) {
 $profileDir = Join-Path (Join-Path $env:USERPROFILE ".dsh") "profiles\web"
 $pkgSrc = Join-Path $src "remfs-persistent"
 if ((Test-Path $profileDir) -and (Test-Path $pkgSrc)) {
+    # The patch-row logic (including MIGRATION of an existing row) lives in
+    # harness-common.ps1 so install.ps1 and the CI real-dsh-smoke job share the
+    # exact same source of truth - CI must test the REAL installer path.
+    $commonHelper = Join-Path $src "harness-common.ps1"
+    if (Test-Path $commonHelper) { . $commonHelper }
+
     $pkgDst = Join-Path $profileDir "vendor\remfs-persistent"
     # Copy the WHOLE package (lib/ is copied as a directory, so new lib modules
     # like security.js are never missed by a per-file list).
@@ -229,26 +229,31 @@ if ((Test-Path $profileDir) -and (Test-Path $pkgSrc)) {
         }
     }
 
-    # Ensure the loader patch row exists (idempotent).
-    $patch = Join-Path $profileDir "cordis.patch.yml"
-    if (-not (Test-Path $patch) -or -not (Select-String -Path $patch -Pattern "remfs-persistent" -Quiet)) {
-        Add-Content -Path $patch -Value "`n- insert:`n    - id: remfs-persistent`n      name: '@zetaluolang/remfs-persistent'`n      inject: [connection, fs]`n" -Encoding ascii
+    # Ensure the loader patch row exists with the exact four-service inject the
+    # host half requires. Set-RemfsPatchRow MIGRATES an existing row (old
+    # installs wrote `inject: [connection, fs]`) instead of leaving it stale.
+    if (Get-Command Set-RemfsPatchRow -ErrorAction SilentlyContinue) {
+        Set-RemfsPatchRow -ProfileDir $profileDir | Out-Null
+        Write-Host "[OK] remfs-persistent loader row ensured (four-service inject, migrated if needed)"
+    } else {
+        Write-Host "[!] Set-RemfsPatchRow helper missing - skipping loader patch (re-run install.ps1)" -ForegroundColor Yellow
     }
     Write-Host "[OK] persistent plugin installed into the web profile"
 } else {
     Write-Host "[!] web profile or remfs-persistent package missing - skip plugin install" -ForegroundColor Yellow
 }
 
-# ---------- 4. enable Tailscale Serve (HTTPS) ----------
+# ---------- 4. Tailscale Serve (HTTPS) is OWNED BY THE LAUNCHER ----------
+# Tailscale Serve --bg persists until explicitly disabled and resumes after
+# reboot/Tailscale restart. Enabling it here at install time (before the
+# harness is even started) could map a FOREIGN process on 127.0.0.1:3080 into
+# the tailnet. The launcher therefore enables/verifies Serve ONLY after OUR dsh
+# process is confirmed to own :3080, disables ONLY this project's mapping on
+# stop, and re-enables on start. We never wipe the whole serve config (it
+# would destroy unrelated user Serve config).
 Write-Host ""
-Write-Host "[...] Enabling Tailscale Serve (HTTPS; needs 'HTTPS Certificates' enabled in the tailnet)..." -ForegroundColor Yellow
-$serveOut = (& $tsCli serve --bg http://127.0.0.1:3080 2>&1 | Out-String)
-if ($LASTEXITCODE -eq 0 -or $serveOut -match "Available within your tailnet") {
-    Write-Host "[OK] Tailscale Serve enabled"
-} else {
-    Write-Host "[!] Serve could not be enabled: $serveOut" -ForegroundColor Yellow
-    Write-Host "    Enable 'HTTPS Certificates' at https://login.tailscale.com/admin/dns and re-run." -ForegroundColor Yellow
-}
+Write-Host "[...] Tailscale Serve (HTTPS) is managed by the launcher: it is enabled only when the DeepSeek Harness process owns :3080, and disabled on stop (only this project's mapping)." -ForegroundColor Yellow
+Write-Host "    If 'HTTPS Certificates' is not yet enabled for your tailnet, enable it at https://login.tailscale.com/admin/dns and the launcher will pick it up automatically." -ForegroundColor Yellow
 
 # ---------- 5. print phone URLs ----------
 Write-Host ""

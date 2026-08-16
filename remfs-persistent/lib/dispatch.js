@@ -165,8 +165,21 @@ export function createDispatcher(adapter, opts = {}) {
           return { ok: true, value: { allowed: roots } }
         }
         case 'workspaces': {
-          const list = await adapter.listWorkspaces()
-          return { ok: true, value: { workspaces: (list || []).map((w) => ({ id: String(w.id), path: String(w.path || ''), title: String(w.title || w.path || '') })) } }
+          // b3dfc4b audit item 6 (option A): expose ONLY workspaces inside the
+          // remfs capability boundary. Native DSH workspace authority is
+          // outside remfs authorization, so a workspace outside the allowed
+          // roots or under a protected path must never be listed here.
+          const r = await resolveRoots(adapter)
+          if (r.error) return err(ERR.PATH_OUTSIDE, 'allowlist unavailable — fix .remfs-roots.json on the PC')
+          const wps = await workspaceRoots()
+          const list = (await adapter.listWorkspaces()) || []
+          const allowed = list.filter((w) => {
+            const p = String(w && w.path || '')
+            if (!p) return false
+            if (deniedPath(p, wps)) return false
+            return isWithin(p, r.roots)
+          })
+          return { ok: true, value: { workspaces: allowed.map((w) => ({ id: String(w.id), path: String(w.path || ''), title: String(w.title || w.path || '') })) } }
         }
         case 'ensureWorkspace': {
           const raw = payload && payload.path
@@ -201,7 +214,17 @@ export function createDispatcher(adapter, opts = {}) {
           const wps = await workspaceRoots()
           if (deniedPath(canonical, wps)) return err(ERR.PATH_PROTECTED, 'path is protected')
           if (!isWithin(canonical, r.roots)) return err(ERR.PATH_OUTSIDE, 'path outside the allowed roots')
-          const entries = await adapter.listDir(target)
+          // b3dfc4b audit item 5: filter EVERY child through the capability
+          // boundary BEFORE its name/metadata leaves /remfs. Hard-denied
+          // children (.ssh, .aws, .env, private keys, system dirs) and
+          // children outside the allowed roots must never appear in listings,
+          // even when the parent directory itself is allowed.
+          const childJoin = (name) => canonical.replace(/[\\/]+$/, '') + '\\' + name
+          const entries = (await adapter.listDir(target)).filter((e) => {
+            const child = childJoin(String(e && e.name || ''))
+            if (deniedPath(child, wps)) return false
+            return isWithin(child, r.roots)
+          })
           let parent = parentOf(canonical)
           if (parent && (deniedPath(parent, wps) || !isWithin(parent, r.roots))) parent = null
           return { ok: true, value: { path: canonical, parent, entries } }

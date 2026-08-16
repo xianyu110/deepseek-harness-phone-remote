@@ -294,14 +294,18 @@ function freshTxt(file, plain, when) {
   return { file, body: plain + '\n' + when + '\n' }
 }
 
-/** True when the pairing .txt currently exposes a usable (non-consumed) code.
- *  Missing/unreadable txt means the plaintext is UNRECOVERABLE even though a
- *  valid codeHash may remain in the store - the user could never pair. */
-async function pairingTxtUsable(file) {
+/** True when the pairing .txt currently exposes a usable code that HASHES to
+ *  the ACTIVE store.pairing.codeHash (b3dfc4b audit item 7). A non-empty,
+ *  non-CONSUMED txt is NOT enough: a stale/forged .txt (left over from an
+ *  earlier pairing) must not be treated as the current code. Missing or
+ *  unreadable txt also means unrecoverable -> regenerate. */
+async function pairingTxtUsable(file, codeHash) {
+  if (!codeHash) return false
   try {
     const body = await readFile(pairingTxtFile(file), 'utf8')
     const first = String(body).split(/\r?\n/)[0] || ''
-    return !!first && !/^CONSUMED/.test(first)
+    if (!first || /^CONSUMED/.test(first)) return false
+    return sha256(parsePairingCode(first)) === codeHash
   } catch {
     return false
   }
@@ -329,7 +333,8 @@ export async function ensurePairingCode(file = securityFile()) {
   return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     const now = Date.now()
-    if (store.pairing && store.pairing.codeHash && store.pairing.expiresAt > now && await pairingTxtUsable(file)) {
+    if (store.pairing && store.pairing.codeHash && store.pairing.expiresAt > now &&
+        await pairingTxtUsable(file, store.pairing.codeHash)) {
       return null
     }
     return writeFreshPairing(store, file, now)
@@ -430,6 +435,9 @@ export async function revokeAllDevices(file = securityFile()) {
     store.devices = []
     store.pairing = null
     await saveStore(file, store)
+    // b3dfc4b audit item 7: pairing was cleared, so invalidate the .txt - a
+    // stale code must not keep looking usable after a revoke-all.
+    await writePairingTxt(consumedTxt(pairingTxtFile(file), new Date().toISOString()))
     return { ok: true }
   })
 }

@@ -101,3 +101,68 @@ if ($tpl -notmatch 'npx @deepseek-ai/dsh web') {
     exit 1
 }
 Write-Host "install smoke: OK (deterministic dsh version resolution, official package message)"
+
+# 7) b3dfc4b audit item 1 (P0): install.ps1 must write the FOUR-service inject
+#    row the host half requires, through the SHARED Set-RemfsPatchRow helper
+#    (which also MIGRATES an existing row) - never a stale two-service row.
+if ($install -notmatch 'Set-RemfsPatchRow') {
+    Write-Error "install.ps1 must call the shared Set-RemfsPatchRow helper (single source of truth for the patch row)"
+    exit 1
+}
+if ($install -match "inject:\s*\[connection,\s*fs\]\s*$") {
+    Write-Error "install.ps1 must not write a stale two-service inject row"
+    exit 1
+}
+# The four-service inject row lives in the shared helper (harness-common.ps1).
+$common = Get-Content (Join-Path $root "harness-common.ps1") -Raw
+if ($common -notmatch "inject:\s*\[connection,\s*fs,\s*sandboxPolicy,\s*workspaceRegistry\]") {
+    Write-Error "Set-RemfsPatchRow (harness-common.ps1) must write the four-service inject row"
+    exit 1
+}
+if ($common -notmatch 'function Set-RemfsPatchRow') {
+    Write-Error "harness-common.ps1 must define the shared Set-RemfsPatchRow function"
+    exit 1
+}
+Write-Host "install smoke: OK (installer writes the four-service inject row via shared helper)"
+
+# 8) b3dfc4b audit item 2: install.ps1 must NOT enable Tailscale Serve
+#    unconditionally at install time (the launcher owns the serve lifecycle
+#    and only enables it after DSH ownership is verified), and must NEVER use
+#    `tailscale serve reset` anywhere.
+if ($install -match 'tailscale serve reset|serve reset') {
+    Write-Error "install.ps1 must never use 'tailscale serve reset' (would destroy unrelated user config)"
+    exit 1
+}
+if ($install -match 'serve --bg http://127\.0\.0\.1:3080') {
+    Write-Error "install.ps1 must not enable Tailscale Serve before DSH ownership is verified (launcher owns the serve lifecycle)"
+    exit 1
+}
+Write-Host "install smoke: OK (no unconditional serve enable, no serve reset)"
+
+# 9) b3dfc4b audit item 4 (SEMVER): Get-VersionKey must be a CORRECT
+#    zero-padded semantic-version comparator. The previous implementation did
+#    not zero-pad major/minor/patch, so 0.10.0 sorted BELOW 0.9.0 and
+#    rc.10 below rc.9. We test the SHARED function from harness-common.ps1
+#    (the exact one install.ps1 runs), not a copy.
+. (Join-Path $root "harness-common.ps1")
+if (-not (Get-Command Get-VersionKey -ErrorAction SilentlyContinue)) {
+    Write-Error "Get-VersionKey must live in harness-common.ps1 (shared with install.ps1)"
+    exit 1
+}
+if ($install -match 'function Get-VersionKey') {
+    Write-Error "install.ps1 must not define its own Get-VersionKey - use the shared comparator"
+    exit 1
+}
+function Assert-LessThan([string]$a, [string]$b) {
+    $ka = Get-VersionKey $a
+    $kb = Get-VersionKey $b
+    if (-not ($ka.CompareTo($kb) -lt 0)) {
+        Write-Error "SemVer ordering broken: '$a' ($ka) must sort BEFORE '$b' ($kb)"
+        exit 1
+    }
+}
+Assert-LessThan '0.9.0' '0.10.0'
+Assert-LessThan '1.9.0' '1.10.0'
+Assert-LessThan '0.1.0-rc.9' '0.1.0-rc.10'
+Assert-LessThan '0.1.0-rc.10' '0.1.0'
+Write-Host "semver: OK (0.9.0<0.10.0, 1.9.0<1.10.0, rc.9<rc.10, rc.10<0.1.0)"

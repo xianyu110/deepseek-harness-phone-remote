@@ -213,6 +213,60 @@ async function freshCode(f) {
   return ensurePairingCode(f)
 }
 
+// b3dfc4b audit item 7: pairingTxtUsable() must verify the plaintext in the
+// .txt actually HASHES to the active store.pairing.codeHash - not merely that
+// the file is non-empty / non-CONSUMED. A stale/forged .txt (e.g. left over
+// from a previous pairing) must NOT be treated as the current code, and
+// ensurePairingCode must regenerate instead of stranding the user with an
+// unrecoverable hash.
+test('ensurePairingCode: a .txt whose plaintext does not hash to the active codeHash is rejected (regenerate)', async () => {
+  const f = await tempFile()
+  const fsp = await import('node:fs/promises')
+  try {
+    const code = await ensurePairingCode(f)
+    assert.ok(code)
+    // overwrite the .txt with a DIFFERENT valid-looking code that does NOT
+    // hash to the store's codeHash (stale/forged txt)
+    const forged = formatPairingCode('a1b2c3d4e5f60718293a4b5c6d7e8f90')
+    await fsp.writeFile(path.join(path.dirname(f), 'remfs-pairing.txt'), forged + '\nstale\n', 'utf8')
+    const regenerated = await ensurePairingCode(f)
+    assert.ok(regenerated && regenerated !== code,
+      'a txt that does not hash to the active codeHash must force regeneration')
+    const p = await pairDevice(regenerated, 'phone', f)
+    assert.ok(p.deviceId && p.credential)
+    // the forged code must NOT pair (either invalid, or used because the
+    // store now holds a different code)
+    const forgedPair = await pairDevice(forged, 'forged', f)
+    assert.ok(!forgedPair.deviceId, 'forged code must never pair')
+    assert.ok(forgedPair.error === 'pairing-invalid' || forgedPair.error === 'pairing-used',
+      'forged code must be rejected, got: ' + forgedPair.error)
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+// b3dfc4b audit item 7: revokeAllDevices() clears pairing, so the .txt must be
+// invalidated (marked CONSUMED) - a stale code must not keep looking usable.
+test('revokeAllDevices: invalidates the pairing txt so the old code cannot mislead', async () => {
+  const f = await tempFile()
+  const fsp = await import('node:fs/promises')
+  try {
+    const code = await ensurePairingCode(f)
+    const d = await pairDevice(code, 'phone', f)
+    assert.ok(d.deviceId)
+    // after consumption the txt is CONSUMED; ensurePairingCode mints a new code
+    const code2 = await ensurePairingCode(f)
+    assert.ok(code2)
+    await revokeAllDevices(f)
+    const txt = path.join(path.dirname(f), 'remfs-pairing.txt')
+    const body = await fsp.readFile(txt, 'utf8')
+    assert.ok(/CONSUMED/.test(body), 'revokeAllDevices must invalidate the pairing txt (got: ' + body + ')')
+    // a fresh ensurePairingCode now mints a code that actually pairs
+    const code3 = await ensurePairingCode(f)
+    assert.ok(code3)
+    const p = await pairDevice(code3, 'new-phone', f)
+    assert.ok(p.deviceId && p.credential)
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
 test('default store location is under the DSH home', () => {
   assert.ok(securityFile().startsWith(path.join(os.homedir(), '.dsh')))
   assert.ok(!securityFile().includes('Documents'))

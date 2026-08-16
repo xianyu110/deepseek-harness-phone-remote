@@ -77,6 +77,57 @@ try {
         exit 1
     }
 
+    # --- 3b) self-heal plugin sync (b3dfc4b audit item 3): the sync must copy
+    #        the COMPLETE lib/ directory tree, never a hand-maintained
+    #        per-file list (a list silently misses new modules and recreates
+    #        the original missing-module bug class). A synthetic EXTRA module
+    #        in the vendor lib/ must land in node_modules. ---
+    $syncDir = Join-Path $env:TEMP ("remfs-sync-" + [guid]::NewGuid().ToString("N"))
+    $vendor = Join-Path $syncDir "vendor\remfs-persistent"
+    $nm = Join-Path $syncDir "node_modules\@zetaluolang\remfs-persistent"
+    try {
+        New-Item -ItemType Directory -Force -Path (Join-Path $vendor "lib") | Out-Null
+        New-Item -ItemType Directory -Force -Path $nm | Out-Null
+        foreach ($f in @("lib\host.js", "lib\client.js", "lib\security.js", "lib\dispatch.js", "package.json")) {
+            $dst = Join-Path $vendor $f
+            New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+            [System.IO.File]::WriteAllText($dst, "// $f")
+        }
+        # synthetic EXTRA module that a per-file list would never copy
+        [System.IO.File]::WriteAllText((Join-Path $vendor "lib\extra-module.js"), "// extra")
+        # nested subdir too (directory-tree sync must be recursive)
+        New-Item -ItemType Directory -Force -Path (Join-Path $vendor "lib\sub") | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $vendor "lib\sub\nested.js"), "// nested")
+
+        if (-not (Test-RemfsPluginReady -Vendor $vendor -NmPkg $nm)) {
+            Write-Error "Test-RemfsPluginReady must accept a full lib/ tree"
+            exit 1
+        }
+        if (-not (Sync-RemfsPlugin -Vendor $vendor -NmPkg $nm)) {
+            Write-Error "Sync-RemfsPlugin failed"
+            exit 1
+        }
+        foreach ($expect in @("lib\host.js", "lib\security.js", "lib\extra-module.js", "lib\sub\nested.js", "package.json")) {
+            if (-not (Test-Path (Join-Path $nm $expect))) {
+                Write-Error "self-heal sync missed '$expect' (per-file list bug class?)"
+                exit 1
+            }
+        }
+        # source guard: the sync must not be a per-file list
+        $commonSrc = Get-Content (Join-Path $root "harness-common.ps1") -Raw
+        if ($commonSrc -match '\$script:RemfsPluginFiles\s*=\s*@\(') {
+            Write-Error "harness-common.ps1 must not reintroduce a per-file plugin list"
+            exit 1
+        }
+        if ($commonSrc -notmatch 'Copy-Item.*lib\\\*.*-Recurse') {
+            Write-Error "Sync-RemfsPlugin must copy the whole lib/ tree recursively"
+            exit 1
+        }
+        Write-Host "self-heal sync: OK (complete lib/ tree incl. synthetic extra module + nested subdir)"
+    } finally {
+        Remove-Item $syncDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     # --- 4) keep_awake ownership: a stale/reused pid is never trusted or
     #        killed; a process whose cmdline contains the keep_awake bin IS. ---
     $keepAwakeBinFake = "C:\Fake\Not\Our\Path\keep_awake.ps1"
@@ -188,6 +239,123 @@ try {
         if ($fwdLan) { Stop-Process -Id $fwdLan.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $fwdLan.Dir -Recurse -Force -ErrorAction SilentlyContinue }
         if ($fwdTs) { Stop-Process -Id $fwdTs.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $fwdTs.Dir -Recurse -Force -ErrorAction SilentlyContinue }
         if ($foreign3) { Stop-Process -Id $foreign3.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $foreign3.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    # --- 6) Tailscale Serve lifecycle (b3dfc4b audit item 2): the serve
+    #        mapping is part of the owned stack. Enable only after ownership is
+    #        verified; disable ONLY this project's mapping (never `serve
+    #        reset`); re-enable on start. Tested against a FAKE tailscale CLI
+    #        that records every invocation. ---
+    $fakeTsDir = Join-Path $env:TEMP ("remfs-fakets-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $fakeTsDir | Out-Null
+    $fakeTs = Join-Path $fakeTsDir "tailscale.cmd"
+    $stateFile = Join-Path $fakeTsDir "serve-state.txt"
+    $invokeLog = Join-Path $fakeTsDir "invocations.txt"
+    # state file must EXIST before `set /p STATE=<` reads it
+    [System.IO.File]::WriteAllText($stateFile, "none")
+    @"
+@echo off
+setlocal enabledelayedexpansion
+echo %*>> "%REMFS_FAKETS_LOG%"
+echo %* | findstr /C:"serve status --json" >nul && goto :status
+echo %* | findstr /C:"--https=443 off" >nul && goto :off
+echo %* | findstr /C:"serve --bg" >nul && goto :bg
+echo %* | findstr /C:"serve reset" >nul && (echo reset-called>> "%REMFS_FAKETS_LOG%" & exit /b 1)
+exit /b 0
+:status
+set /p STATE=< "%REMFS_FAKETS_STATE%"
+if "!STATE!"=="ours" (
+  echo { "TCP": { "443": { "HTTPS": true } }, "Web": { "fake.ts.net:443": { "Handlers": { "/": { "Proxy": "http://127.0.0.1:3080" } } } } }
+) else if "!STATE!"=="foreign" (
+  echo { "TCP": { "443": { "HTTPS": true } }, "Web": { "fake.ts.net:443": { "Handlers": { "/": { "Proxy": "http://127.0.0.1:9999" } } } } }
+) else (
+  echo { "TCP": {}, "Web": {} }
+)
+exit /b 0
+:off
+echo none> "%REMFS_FAKETS_STATE%"
+exit /b 0
+:bg
+echo ours> "%REMFS_FAKETS_STATE%"
+exit /b 0
+"@ | Set-Content -Path $fakeTs -Encoding ascii
+    $env:REMFS_FAKETS_STATE = $stateFile
+    $env:REMFS_FAKETS_LOG = $invokeLog
+    try {
+        # fresh state: no mapping
+        [System.IO.File]::WriteAllText($stateFile, "none")
+        if (Test-OwnedServeMapping -TsCli $fakeTs) {
+            Write-Error "serve: empty config must not report as owned"
+            exit 1
+        }
+        # enable REQUIRES verified ownership
+        if (Enable-OwnedServe -TsCli $fakeTs -HarnessOwned $false) {
+            Write-Error "serve: enable must be refused without verified harness ownership"
+            exit 1
+        }
+        if (-not (Enable-OwnedServe -TsCli $fakeTs -HarnessOwned $true)) {
+            Write-Error "serve: enable with ownership must create OUR mapping"
+            exit 1
+        }
+        # foreign mapping must never be disabled or re-enabled
+        [System.IO.File]::WriteAllText($stateFile, "foreign")
+        if (Disable-OwnedServe -TsCli $fakeTs) {
+            Write-Error "serve: foreign mapping must NOT be disabled"
+            exit 1
+        }
+        if (Enable-OwnedServe -TsCli $fakeTs -HarnessOwned $true) {
+            Write-Error "serve: foreign mapping must NOT be re-enabled/overwritten"
+            exit 1
+        }
+        # our mapping is disabled with the scoped flag, never `reset`
+        [System.IO.File]::WriteAllText($stateFile, "ours")
+        if (-not (Disable-OwnedServe -TsCli $fakeTs)) {
+            Write-Error "serve: our mapping must be disabled on stop"
+            exit 1
+        }
+        $invocations = if (Test-Path $invokeLog) { Get-Content $invokeLog -Raw } else { "" }
+        if ($invocations -match 'reset') {
+            Write-Error "serve: stop must NEVER call 'tailscale serve reset'"
+            exit 1
+        }
+        if ($invocations -notmatch '--https=443 off') {
+            Write-Error "serve: stop must disable ONLY the 443 mapping (--https=443 off), found: $invocations"
+            exit 1
+        }
+        # source checks: stop_harness disables serve; start template gates on
+        # Test-HarnessRunning; install.ps1 does not enable serve up front
+        $stopSrc2 = Get-Content (Join-Path $root "stop_harness.ps1") -Raw
+        if ($stopSrc2 -notmatch 'Disable-OwnedServe') {
+            Write-Error "stop_harness.ps1 must disable the owned serve mapping"
+            exit 1
+        }
+        if ($stopSrc2 -match 'serve reset') {
+            Write-Error "stop_harness.ps1 must never use 'serve reset'"
+            exit 1
+        }
+        $tplSrc2 = Get-Content (Join-Path $root "start_harness.template.ps1") -Raw
+        if ($tplSrc2 -notmatch 'Enable-OwnedServe') {
+            Write-Error "start_harness template must re-enable the owned serve mapping"
+            exit 1
+        }
+        if ($tplSrc2 -notmatch 'Test-HarnessRunning') {
+            Write-Error "start_harness template must gate serve enable on harness ownership"
+            exit 1
+        }
+        $installSrc = Get-Content (Join-Path $root "install.ps1") -Raw
+        if ($installSrc -match 'serve reset') {
+            Write-Error "install.ps1 must never use 'serve reset'"
+            exit 1
+        }
+        if ($installSrc -match 'serve --bg http://127\.0\.0\.1:3080') {
+            Write-Error "install.ps1 must not enable serve before DSH ownership is verified (launcher owns the lifecycle)"
+            exit 1
+        }
+        Write-Host "serve lifecycle: OK (enable gated on ownership, foreign untouched, only-our-mapping disabled, no reset)"
+    } finally {
+        Remove-Item $fakeTsDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item Env:\REMFS_FAKETS_STATE -ErrorAction SilentlyContinue
+        Remove-Item Env:\REMFS_FAKETS_LOG -ErrorAction SilentlyContinue
     }
 
     Write-Host "launcher ownership: OK (foreign not trusted/killed, owned killed, forwarder IP derived)"

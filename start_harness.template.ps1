@@ -141,6 +141,18 @@ if ((Test-HarnessRunning) -and (Test-Path $forwardBin) -and -not (Test-ForwardRu
     Start-Sleep -Seconds 1
 }
 
+# Tailscale Serve (HTTPS) lifecycle: the mapping is part of OUR stack. It is
+# enabled ONLY when our harness is confirmed to own :3080 (a foreign process
+# must never be proxied into the tailnet), re-enabled on every start, and
+# disabled on stop. We never use `tailscale serve reset`.
+if ((Test-HarnessRunning) -and (Get-Command Enable-OwnedServe -ErrorAction SilentlyContinue)) {
+    if (Enable-OwnedServe -HarnessOwned $true) {
+        Write-Host "Tailscale Serve mapping ensured (this project's HTTPS entry)."
+    } else {
+        Write-Host "[!] Tailscale Serve mapping could not be verified (HTTPS Certificates may be disabled in the tailnet)." -ForegroundColor Yellow
+    }
+}
+
 # Walk-on-LAN forwarder: only when explicitly enabled.
 if ($lanIP -and (Test-HarnessRunning) -and (Test-Path $forwardBin)) {
     $lanOwned = Get-OwnedForwarderPid -ListenIP $lanIP -Port 3080
