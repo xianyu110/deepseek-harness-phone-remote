@@ -86,20 +86,13 @@ authentication. Pairing and the filesystem capability layer are.
 - See [SECURITY.md](SECURITY.md) for the full threat model (what we do and do
   not protect).
 
-## Comparison
+## Positioning
 
-| | Official DSH | dsh-web-ui | this project |
-|---|---|---|---|
-| Mobile experience | none (loopback) | replacement mobile UI | **native UI kept**, workbench bridge |
-| Pairing / device auth | — | QR + one-time token | pairing + per-device credentials + revoke |
-| File access | local only | desktop right panel | phone-side bridge (browse/edit/upload/download) |
-| Workspace control | local | sessions + messages | start/resume agent in any folder |
-| Network | localhost | LAN QR / cloudflared | Tailscale (HTTPS/IP) + LAN direct |
-| Positioning | the harness | UI/skin enhancement suite | **secure remote workspace & filesystem bridge** |
-
-Both community projects are welcome additions; they simply aim at different
-things — dsh-web-ui re-skins/enhances the UI, this project makes the harness a
-remotely usable work environment without a new frontend.
+This project is a **secure remote workspace & filesystem bridge** for DeepSeek
+Harness: it keeps the native web UI and adds authenticated remote access plus a
+capability-bounded file/workspace layer. It is not a UI replacement, skin, or
+alternative frontend — the ecosystem has other community projects for those
+directions, and they are complementary rather than competing.
 
 ## Installation
 
