@@ -1,185 +1,131 @@
-# DeepSeek Harness 手机远程控制(Phone Remote)
+# DeepSeek Harness Remote Workspace
 
-[English](README.md) | **中文**
+**Secure Remote Workspace & Filesystem Bridge for DeepSeek Harness.**
 
-通过 **Tailscale** 用手机安全地远程访问 PC 上的 DeepSeek Harness Web GUI,并内置一个**持久化文件/工作区插件**:手机上可以直接浏览、查看、编辑 PC 文件,以及在任何文件夹开始新的会话(解决手机端无法弹系统目录选择框的问题)。
+> 你的 DeepSeek Harness,随处可用——**原生 Web UI**,经安全网络访问,配**设备认证 RPC** 与**能力受限的文件系统**。
 
-> 部署包:一键部署(`一键部署.cmd`),基于 **Tailscale** → 自动安装缺失的 Node.js / Tailscale(winget,弹 UAC 点"是")→ 引导你完成一次性的 Tailscale 账号登录(唯一手动步骤)→ 自动探测 Tailscale 信息 → 生成启动脚本 → 开启 Tailscale Serve(HTTPS)→ 安装持久插件 → 打印手机访问地址。
+本项目不替换 Harness 界面,而是把 Harness 本身变成可远程使用的工作环境:手机通过 Tailscale(或局域网)打开**真正的** DeepSeek Harness Web UI,插件桥接浏览器无法远程完成的两种事——在任意文件夹开始/恢复 Agent 会话,以及读写、上传、下载 PC 文件。
 
-## 为什么需要它
+[English](README.md) | **中文** · [架构](docs/architecture.md) · [安全](SECURITY.md) · [贡献](CONTRIBUTING.md)
 
-- Harness GUI 只绑定 `127.0.0.1`,手机直连不了;
-- GUI 的目录选择器是特权方法、仅限本机,手机端弹不出;
+## 为什么
+
+- Harness 只绑定 `127.0.0.1`——这是合理的安全默认。本项目保留它:GUI 绝不暴露给局域网/公网。
+- 手机浏览器够不到 loopback,且 GUI 的目录选择器是仅本机的特权方法——本插件为此补齐**安全通路**(Tailscale + 局域网转发器)与**文件/工作区桥**。
 - 普通会话随页面消失——本插件是**持久化 loader 条目**,每次打开页面自动加载,无需重新运行。
-
-## 功能
-
-- **一键部署(自动装依赖)**:`install.ps1` 自动安装缺失的 **Node.js** 和 **Tailscale**(winget,弹 UAC 点"是"),引导一次性 Tailscale 登录,然后自动探测 IP/域名、写入 `start_harness.ps1`、启用 `tailscale serve`、安装持久插件;
-- **开机自启**:每次登录自动拉起 Harness + 转发器 + 防睡眠;
-- **持久化插件**:`remfs-persistent` 以 loader 条目常驻,host 通道 `/remfs` 随 Harness 启动注册,客户端模块随页面加载——刷新无需重新运行;
-- **双语界面**:英文 / 中文(自动跟随浏览器语言,工作台头部可切换,记忆选择)。
-
-### 手机端 UI 优化(针对小屏专项适配)
-
-- **侧边栏自动收起**:小屏下 Harness 侧边栏/详情栏自动折叠,会话区占满全宽;屏幕上有一个可**拖动到任意位置的 ☰ 悬浮球**,点一下展开侧边栏、再点一下收起,单手可操作;
-- **双标签工作台**:`＋ 新建会话` / `📁 文件浏览` 一个面板搞定,可从会话头部或设置里打开;
-- **面包屑导航**:点任意路径段直接跳转;另有**绝对路径输入框 + Go**(手机端弹不出系统目录选择框,这是进入任意目录的方式);
-- **toast 反馈**:保存/上传/开始会话/出错等每个操作都有顶部提示;
-- **★ 工作区徽标**:已注册工作区的文件夹在列表里带星标,当前目录是工作区时头部也显示;
-- **会话标签页文件置灰**:在"新建会话"页点文件会自动跳到"文件浏览"并预览,保证会话页专注在文件夹上;
-- **隐藏系统目录**:默认隐藏系统保护目录,⋯ 菜单里可开关;
-- **响应式 CSS**:≤700px 自动折叠侧栏,工作台面板适配窄屏。
-
-### 手机读取 PC 本地文件
-
-- **浏览**白名单根目录(默认 `Documents`),面包屑逐级跳转;
-- **预览**:文本、图片直接内联预览;二进制文件可**下载**(5MB 上限);
-- **编辑**文本文件并保存回 PC;
-- **上传**手机里的文本文件到任意允许目录;
-- **保护路径**:系统目录、凭据/密钥文件(`.credentials.yaml`、`.ssh`、`id_rsa`、`*.pem` 等)、隐私数据目录(微信/WPS 数据)由 host 层硬性拦截,与白名单无关(见安全章节)。
 
 ## 架构
 
+```mermaid
+flowchart LR
+  P[手机 / 远程浏览器] -->|Tailscale HTTPS| S[talkscale serve]
+  P -->|Tailscale IP| T[TCP 转发器]
+  P -->|同一 Wi-Fi:LAN IP| L[局域网转发器]
+  S --> H[DeepSeek Harness Web<br/>127.0.0.1:3080]
+  T --> H
+  L --> H
+  H --> R[/remfs RPC 通道<br/>trusted-host 围栏/]
+  R --> A[设备认证<br/>配对 + 每设备凭据]
+  A --> F[文件能力层<br/>白名单 + 保护路径 + realpath]
+  F --> W[(已批准工作区)]
 ```
-手机 (OPPO / 任意 Android / iOS)
-  │  Tailscale App(已登录同一 tailnet)
-  ├─ https://<电脑名>.<tailnet>.ts.net      ← Tailscale Serve(HTTPS,推荐)
-  └─ http://<TailscaleIP>:3080              ← 备用:TCP 转发器 tailscale_forward.js
-        │
-        ▼
-PC(仅监听本机 + tailnet,不监听 0.0.0.0)
-  ├─ 127.0.0.1:3080        dsh web(GUI,仅本机)
-  └─ 100.x.y.z:3080        tailscale_forward.js → 转发到 127.0.0.1:3080
-```
 
-- Harness GUI 只绑定 `127.0.0.1`,局域网/公网默认不可达;
-- 手机通过 **Tailscale WireGuard 加密隧道**访问,HTTPS 由 tailnet 证书提供;
-- `/api` 与插件 RPC 走浏览器信任围栏:仅接受 loopback 与 `--trusted-host` 声明的主机。
+三层独立信任:
 
-## 实测设备
+1. **传输层**——谁能*到达*通道:Tailscale 成员或你的局域网(转发器只绑 Tailscale IP 和 LAN IP,从不绑 0.0.0.0)。
+2. **应用层**——谁能*使用*:设备配对 + 每设备凭据。
+3. **能力层**——能碰*什么*:白名单 + 保护路径。
 
-| 设备 | 屏幕 | 状态 |
-|---|---|---|
-| OPPO Find X8 Ultra | ~1440×3168 | ✅ 主力测试设备(真机) |
-| iPhone 16 Pro / SE、Pixel 8、Galaxy S24、Redmi Note、iPad Air、iPhone 横屏 | 模拟 | ✅ 布局已验证 |
+`trusted-host` 和 tailnet 是**传输层**信任,不是认证。认证是配对,文件边界是能力层。
 
-### 模拟设备矩阵(headless Chromium,当前构建)
+## 功能
 
-| 设备 | 屏幕 | 侧栏 | ☰ 球 | 工作台面板 | 溢出 |
-|---|---|---|---|---|---|
-| iPhone 16 Pro | 402×874 | 收起 | 显示 | 386px(96vw) | 无 |
-| iPhone SE(小屏) | 375×667 | 收起 | 显示 | 360px(96vw) | 无 |
-| Pixel 8 | 412×915 | 收起 | 显示 | 396px(96vw) | 无 |
-| Galaxy S24 | 360×780 | 收起 | 显示 | 346px(96vw) | 无 |
-| Redmi Note(小屏安卓) | 360×640 | 收起 | 显示 | 346px(96vw) | 无 |
-| iPad Air(平板) | 820×1180 | 56px 导轨 | 隐藏 | 430px(上限) | 无 |
-| iPhone 16 Pro(横屏) | 874×402 | 56px 导轨 | 隐藏 | 430px(上限) | 无 |
+- **一键部署(自动装依赖)**——`install.ps1` 自动装 Node.js/Tailscale、引导一次性登录、写启动脚本、开 HTTPS Serve、装插件、注册开机自启。
+- **Walk-on-LAN**——第二个转发器绑定 PC 局域网 IP(每次启动现测,加入 `--trusted-host`);同一 Wi-Fi 下手机可绕过 Tailscale 直连 `http://192.168.x.x:3080`,`/remfs` 依旧设备认证。
+- **持久化插件**——loader 条目;host 通道随启动注册,客户端模块随页面加载。
+- **设备配对与管理**——一次性配对码(10 分钟有效、仅一次);列出/吊销/吊销全部设备;凭据只存哈希。
+- **手机工作台**——新建会话/文件浏览双标签、面包屑、预览/编辑/上传/下载、工作区徽标、悬浮球、侧栏自动收起、中英双语。
+- **host 层保护路径**——系统目录、AppData、凭据/密钥文件(`.credentials.yaml`/`.ssh`/`.aws`/`.gnupg`/`.env`/`id_rsa`/`*.pem` 等)与隐私数据目录(微信/WPS)无论白名单如何都拦截。
 
-截图: [`docs/device-tests/`](docs/device-tests/)
+## 安全模型
 
-布局为流式(自适应栅格):手机自动收起侧栏、用 ☰ 悬浮球;平板/横屏保留 56px 导轨。更多机型真机验证计划中——遇到布局问题欢迎开 issue,附上设备型号 + 屏幕分辨率。
+- **Tailscale ≠ 认证**:它只证明"在哪个网络",不证明"你是谁"。配对才是应用边界。
+- **trusted-host ≠ 认证**:它只是浏览器信任围栏(Host 头 + 跨站检查)。配对才是边界。
+- **文件白名单是主要文件权限边界**:远程客户端只能*收窄*白名单;扩大(`C:\`、新盘符)必须在本机编辑 `.remfs-roots.json`。
+- **路径逃逸双重防御**:带 `..`/UNC 的原始路径直接拒绝;规范后的 realpath 必须落在白名单内(符号链接/junction 逃逸失败)。
+- 完整威胁模型见 [SECURITY.md](SECURITY.md)。
 
-## 环境要求
+## 对比
 
-| 项目 | 说明 |
-|---|---|
-| Windows 10/11 | 64 位;winget 可用(Win11 自带) |
-| Node.js ≥ 18 | **一键部署自动安装**(缺失时) |
-| Tailscale | **一键部署自动安装**;你只需注册一个自己的(免费)Tailscale 账号——[tailscale.com](https://tailscale.com) |
-| HTTPS Certificates | tailnet 后台开启:https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
-| DeepSeek Harness | `npx dsh web` 启动过一次(用于生成 npx 缓存路径) |
+| | 官方 DSH | dsh-web-ui | 本项目 |
+|---|---|---|---|
+| 移动端体验 | 无(仅本机) | 替代式移动 UI | **保留原生 UI**,桥接工作台 |
+| 配对/设备认证 | — | 二维码 + 一次性令牌 | 配对 + 每设备凭据 + 吊销 |
+| 文件访问 | 仅本机 | 桌面右侧面板 | 手机端桥(浏览/编辑/上传/下载) |
+| 工作区控制 | 仅本机 | 会话 + 消息 | 任意文件夹开始/恢复会话 |
+| 网络 | localhost | 局域网二维码 / cloudflared | Tailscale(HTTPS/IP)+ 局域网直连 |
+| 定位 | Harness 本体 | UI/皮肤增强套件 | **安全远程工作区与文件系统桥** |
 
-## 从 npm 安装
+两个社区项目方向不同,互不冲突。
 
-插件已发布到 npm:**[@zetaluolang/remfs-persistent](https://www.npmjs.com/package/@zetaluolang/remfs-persistent)**。如果已有 `dsh web` profile:
+## 安装
+
+**高级用户(npm):**
 
 ```bash
-# 1. 把包装进 web profile
 dsh plugin --profile web add @zetaluolang/remfs-persistent
-
-# 2. 注册 loader 行(追加到 %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml)
-# - insert:
-#     - id: remfs-persistent
-#       name: '@zetaluolang/remfs-persistent'
-#       inject: [connection, fs]
-
-# 3. 重启 dsh web,打开 GUI——工作台出现在会话头部
+# 在 %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml 追加:
+#   - insert:
+#       - id: remfs-persistent
+#         name: '@zetaluolang/remfs-persistent'
+#         inject: [connection, fs]
+# 重启 dsh web
 ```
 
-或者直接用下面的一键部署,全自动完成。
+**普通 Windows 用户(一键):** 双击 **`一键部署.cmd`** ——自动装 Node.js + Tailscale、引导登录、写启动脚本、开 HTTPS Serve、装插件,并打印手机访问地址(HTTPS / Tailscale IP / LAN IP)。
 
-## 一键部署
+### 手机首次使用(配对)
 
-1. 在 PC 上双击 **`一键部署.cmd`**(建议右键"以管理员身份运行",自动安装依赖时需要);
-2. 脚本自动安装缺失的 **Node.js** 和 **Tailscale**(winget,弹 UAC 就点"是";需要联网,稍等一两分钟);
-3. 如果 Tailscale 还没登录,脚本会打开登录页并**停下来等你**:用自己的(免费)Tailscale 账号登录;同时给**手机**也装上 Tailscale App 并用**同一个账号**登录。完成后按回车;
-4. 脚本继续:生成 `%USERPROFILE%\.dsh\launcher\start_harness.ps1` → 开启 HTTPS Serve → 安装持久插件到 `%USERPROFILE%\.dsh\profiles\web` → 打印手机地址;
-5. 手机:打开 Tailscale App(确保 **Connected**)→ 浏览器访问打印出的 `https://...ts.net`;
-6. 以后开机自动运行;手动启停:
-   - 启动:`%USERPROFILE%\.dsh\launcher\start_harness.ps1`
-   - 重启:`%USERPROFILE%\.dsh\launcher\restart_harness_once.ps1`
-   - 停止:`%USERPROFILE%\.dsh\launcher\stop_harness.ps1`(同时结束防睡眠,电脑恢复可休眠)
+1. 打开手机地址(`https://<电脑名>.<tailnet>.ts.net`,或同一 Wi-Fi 的 LAN 地址)。
+2. 工作台显示**配对界面**。
+3. 在电脑上读取配对码:`%USERPROFILE%\.dsh\remfs-pairing.txt`(或 harness 日志)。
+4. 在手机上输入配对码 + 设备名 → 配对完成。凭据存手机,电脑只存哈希。
+5. 随时可在工作台 ⋯ → 设备 里吊销设备。
 
-### install.ps1 具体做了什么
+## 威胁模型
 
-- 探测 Tailscale IP(`tailscale ip -4`)与 MagicDNS 域名,替换模板占位符生成 `start_harness.ps1`;
-- 自动定位 npx 缓存中的 `dsh` 入口(`_npx` 哈希目录会随安装变化,不写死);
-- `tailscale serve --bg http://127.0.0.1:3080` 开启 HTTPS;
-- 把 `remfs-persistent`(host RPC 通道 + 浏览器模块)装入 web profile:
-  - 源码 → `profiles\web\vendor\remfs-persistent\`,并链接/复制到 `node_modules\@zetaluolang\remfs-persistent`;
-  - 幂等写入 `profiles\web\cordis.patch.yml` 的 loader 条目(含 `inject: [connection, fs]`);
-- 脚本统一安装到 `%USERPROFILE%\.dsh\launcher\`(**不在 Documents 内**,见安全章节)。
+**防护**:未认证 RPC、远程扩大白名单、路径逃逸、凭据落盘泄露、GUI 意外暴露到局域网/公网。
 
-## ⚠️ 安全须知(务必阅读)
-
-- **没有登录/密码/2FA。** GUI 与文件插件的信任边界 = **"能连上你 tailnet 的设备"**。任何加入该 tailnet 的设备都能无登录读写你的文件、驱动 agent 执行命令。**不要共享 tailnet、不要加未知设备、手机丢失请立即在 tailnet 后台移除该设备**。
-- **允许目录只是 UI 护栏,不是安全边界。** "管理可访问目录"可以扩大到任意路径。
-- **host 层保护路径(不可绕过):** 系统目录(`Windows`、`System Volume Information`、`$Recycle.Bin`、`Program Files`、`ProgramData` 等)、凭据/密钥文件(`.credentials.yaml`、`.ssh`、`id_rsa`、`*.pem/.key/.pfx`、`ntuser.dat`、C 盘系统 hive)、隐私数据目录(`xwechat_files`、`KingsoftData`、`WPSCloudSvr`、`Tencent Files`)。白名单扩到 `C:\` 也读不到这些。已注册工作区若位于受保护目录内(如微信文件工作区)仍可访问。
-- **DeepSeek API Key** 明文位于 `%USERPROFILE%\.dsh\.credentials.yaml`。保护路径已拦截它;请勿把该文件放进任何会被上传的目录。
-- 新会话默认权限为受限(`workspace-write` + 操作需确认);个别会话可按需切换,但请保持默认。
-- 明文 HTTP 回退路径(`http://<IP>:3080`)仅用于 tailnet 内部(WireGuard 已加密),日常请用 HTTPS。
-
-## 目录结构
-
-```
-dsh-remote/
-├─ 一键部署.cmd              一键部署入口
-├─ install.ps1               部署脚本(探测/生成/安装)
-├─ start_harness.template.ps1  启动脚本模板(占位符由 install.ps1 填充)
-├─ tailscale_forward.js      TCP 转发器(tailnet IP → 127.0.0.1:3080)
-├─ restart_harness.ps1       重启(杀 3080 监听后重新拉起)
-├─ stop_harness.ps1          停止 Harness + 转发器 + 防睡眠
-├─ keep_awake.ps1            防睡眠(ES_SYSTEM_REQUIRED 循环)
-└─ remfs-persistent/         持久插件(host RPC 通道 + 浏览器工作台)
-   ├─ package.json           dsh.client 清单 + exports
-   ├─ lib/host.js            /remfs RPC 通道(信任围栏 + 白名单 + 保护路径)
-   └─ lib/client.js          手机工作台 UI(会话/文件双标签、toast、悬浮球)
-```
+**暂不防护**:Harness GUI 的 `/api` 本身没有用户登录(配对保护 `/remfs`,不保护 GUI——请保持网络边界收紧)、宿主机被攻破、Tailscale 账号被攻破。详见 [SECURITY.md](SECURITY.md)。
 
 ## 常见问题
 
 | 现象 | 处理 |
 |---|---|
-| 手机打不开页面 | 手机 Tailscale 是否 Connected;PC 侧 `start_harness.ps1` 是否已跑(3080 监听) |
-| 手机访问显示 403 | 访问地址的 Host 不在信任列表;HTTPS 请用 `<电脑名>.<tailnet>.ts.net`,HTTP 用 PC 的 Tailscale IP |
-| HTTPS 证书报错 | tailnet 后台开启 HTTPS Certificates 后重跑 install.ps1 |
-| 手机端无法浏览某些目录 | 该目录不在白名单(可"管理可访问目录"添加);系统/凭据/隐私目录被保护路径硬性拦截 |
-| 会话没反应/插件不见了 | 刷新页面(持久插件随页面自动加载,无需重新运行) |
-| `dsh plugin add` 后插件没出现 | 必须**手动补 loader 行**到 `cordis.patch.yml`(`dsh plugin add` 只装依赖)并重启 `dsh web` |
-| 工作台按钮不显示 | 先打开一个会话——按钮在会话头部;设置页里也有 |
-| `npm.ps1` 被执行策略拦截 | 改用 `npm.cmd`,或执行一次 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
-| 刚发布完 `npm view` 显示 404 | CDN 边缘缓存——等一分钟或用 `Cache-Control: no-cache` 查询;发布本身已成功(PUT 200) |
-| 升级 dsh 后启动失败 | npx 缓存路径变化,重跑一次 `一键部署.cmd` 重新探测 |
+| 手机一直停在配对界面 | 读取 `%USERPROFILE%\.dsh\remfs-pairing.txt`;配对码 10 分钟过期——重启 harness 生成新的 |
+| 设备被吊销/重新配对失败 | 配对码一次性;重启 harness 获取新码 |
+| 手机 403 | 用打印的 HTTPS/Tailscale/LAN 地址;GUI 需把这些主机加入信任(一键部署自动完成) |
+| LAN 地址不通 | 手机需在同一 Wi-Fi;重跑启动脚本让 LAN IP 重新检测 |
+| `npm.ps1` 被执行策略拦截 | 用 `npm.cmd`,或 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| 发布后 `npm view` 404 | CDN 缓存——等一分钟或用 `Cache-Control: no-cache` |
+| `dsh plugin add` 后插件没出现 | 必须补 loader 行并重启 `dsh web` |
+| 电脑睡眠 | 部署已处理 keep_awake + 电源计划,见 `keep_awake.ps1` |
+
+## 实测设备
+
+- OPPO Find X8 Ultra(真机)。
+- 模拟矩阵:iPhone 16 Pro/SE、Pixel 8、Galaxy S24、Redmi Note、iPad Air、iPhone 横屏——侧栏收起、悬浮球、面板宽度、无溢出均通过。见 `docs/device-tests/`。
 
 ## Roadmap
 
-- [x] Tailscale HTTPS + 转发器访问
-- [x] 持久化插件(无需每次运行)
-- [x] 双语界面(EN / 中文)
-- [x] host 层保护路径拒绝清单
-- [ ] 更多设备分辨率验证
+- [x] Tailscale HTTPS/IP + walk-on-LAN
+- [x] 持久化插件(免重新运行)
+- [x] 设备配对 + 凭据认证 + 吊销
+- [x] 能力受限白名单 + 保护路径 + 路径逃逸测试
+- [x] 双语界面、安全测试、CI
+- [ ] 更多分辨率验证
 - [ ] Tailscale ACL 加固指南
-- [ ] README 配图
+- [ ] 上游贡献
 
 ## License
 

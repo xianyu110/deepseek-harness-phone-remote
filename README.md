@@ -3,192 +3,174 @@
 **Secure Remote Workspace & Filesystem Bridge for DeepSeek Harness.**
 
 > Your DeepSeek Harness, anywhere — the **native web UI**, over a secure network,
-> with **authenticated RPC** and a **capability-bounded filesystem**.
+> with **device-authenticated RPC** and a **capability-bounded filesystem**.
 
 This project does not replace the Harness UI. It turns Harness itself into a
-remote work environment: the phone opens the real DeepSeek Harness web UI over
-Tailscale, and a persistent plugin bridges the two gaps a browser can't close
-remotely — starting/resuming an agent in any folder, and reading, writing,
-uploading and downloading files on the host.
+remote work environment: the phone opens the *real* DeepSeek Harness web UI over
+Tailscale (or your LAN), and a persistent plugin bridges the two gaps a browser
+can't close remotely — starting/resuming an agent in any folder, and reading,
+writing, uploading and downloading files on the host.
 
-> One-click deploy, built on **Tailscale**: `一键部署.cmd` → auto-installs missing Node.js / Tailscale (winget) → walks you through the one-time Tailscale sign-in → detects your identity → generates launch scripts → enables Tailscale Serve (HTTPS) → installs the persistent plugin → prints the phone URL. Registering your own Tailscale account is the **only** manual step.
-
-**English** | [中文](README.zh.md)
+**English** | [中文](README.zh.md) · [Architecture](docs/architecture.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 ## Why
 
-- The Harness Web GUI binds `127.0.0.1` only — a deliberate, sane default. This project keeps that: the GUI is never exposed to the LAN or public internet.
-- A phone browser still can't reach loopback, and the GUI's directory picker is a loopback-only privileged method — so this plugin adds a **secure path** (Tailscale + authenticated RPC) and a **filesystem/workspace bridge** for exactly those two gaps.
-- Sessions normally die with the page — this plugin is a **persistent loader entry**, so the workbench loads on every page automatically, no per-session "run" needed.
-
-## Features
-
-- **One-click deploy (auto-installs prerequisites)** — `install.ps1` installs missing **Node.js** and **Tailscale** via winget (one UAC click), guides the one-time Tailscale sign-in, then auto-detects the Tailscale IP / MagicDNS name, writes `start_harness.ps1`, enables `tailscale serve` (HTTPS) and installs the persistent plugin.
-- **Auto-start on login** — harness + forwarder + keep-awake start automatically.
-- **Persistent plugin** — `remfs-persistent` is a loader entry: host RPC channel `/remfs` registers at harness start; the client module is served on every page. No re-running after refresh.
-- **Bilingual UI** — English / 中文 (auto-detects browser language, toggle in the workbench header, remembered).
-
-### Mobile-first UI (optimized for phone screens)
-
-- **Auto-collapsed sidebar** — on small screens the harness sidebar/details panels collapse and the conversation gets full width; a floating **☰** ball re-expands the sidebar (tap again to collapse). The ball is **draggable** anywhere on screen for one-handed use.
-- **Two-tab workbench** — `＋ New Session` / `📁 Files` in one panel, opened from the session header or Settings.
-- **Breadcrumb navigation** — tap any path segment to jump; plus a direct absolute-path input with a Go button (the phone cannot open the OS directory picker, so this is the way in).
-- **Toast feedback** — every action (save / upload / session start / errors) confirms with a top toast.
-- **★ workspace badges** — folders that are registered workspaces are flagged in file lists, and the header shows a badge when the current folder is a workspace.
-- **Files dimmed in the Session tab** — tapping a file auto-switches to the Files tab and previews it, so the Session tab stays focused on folders.
-- **Hide system dirs** — system-protected dirs are hidden by default with a toggle in the ⋯ menu.
-- **Responsive CSS** — side panels collapse at ≤700px; the workbench panel fits narrow screens.
-
-### Read & manage PC local files from the phone
-
-- **Browse** allowlisted roots (default `Documents`) with breadcrumbs.
-- **Preview** text and images inline; **download** binary files (5 MB cap).
-- **Edit** text files and save back to the PC.
-- **Upload** text files from the phone into any allowed folder.
-- **Protected paths** — system dirs, credential/key files (`.credentials.yaml`, `.ssh`, `id_rsa`, `*.pem`, …) and private data dirs (WeChat/WPS data) are hard-blocked host-side regardless of the allowlist (see Security).
+- Harness binds `127.0.0.1` — a deliberate, sane default. This project keeps it:
+  the GUI is never exposed to the LAN or public internet.
+- A phone browser still can't reach loopback, and the GUI's directory picker is
+  a loopback-only privileged method — so this plugin adds a **secure path**
+  (Tailscale + LAN forwarders) and a **filesystem/workspace bridge** for exactly
+  those two gaps.
+- Sessions normally die with the page — this plugin is a **persistent loader
+  entry**, so the workbench loads on every page automatically, no per-session
+  "run" needed.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  P[Phone / remote browser] -->|Tailscale HTTPS| S[talkscale serve]
+  P -->|Tailscale IP| T[TCP forwarder]
+  P -->|same Wi-Fi: LAN IP| L[LAN forwarder]
+  S --> H[DeepSeek Harness Web<br/>127.0.0.1:3080]
+  T --> H
+  L --> H
+  H --> R[/remfs RPC channel<br/>trusted-host fence/]
+  R --> A[Device authentication<br/>pairing + per-device credential]
+  A --> F[Filesystem capability layer<br/>allowlist + protected paths + realpath]
+  F --> W[(Approved workspace)]
 ```
-Phone (any Android / iOS)
-  │  Tailscale app (same tailnet)
-  ├─ https://<pc-name>.<tailnet>.ts.net      ← Tailscale Serve (HTTPS, recommended)
-  └─ http://<TailscaleIP>:3080              ← fallback: TCP forwarder tailscale_forward.js
-        │
-        ▼
-PC (listens on loopback + tailnet only, never 0.0.0.0)
-  ├─ 127.0.0.1:3080        dsh web (GUI, loopback only)
-  └─ 100.x.y.z:3080        tailscale_forward.js → forwards to 127.0.0.1:3080
-```
 
-- GUI binds `127.0.0.1`; the LAN / public internet cannot reach it.
-- Phone traffic travels through the **Tailscale WireGuard tunnel**; HTTPS is served with the tailnet certificate.
-- The `/api` and plugin RPC go through the browser-trust fence: only loopback and `--trusted-host` authorities pass.
+Three independent layers:
 
-## Tested devices
+1. **Transport** — who can *reach* the channel: Tailscale membership or your LAN
+   (forwarders only bind the Tailscale IP and the LAN IP; never 0.0.0.0).
+2. **Application** — who may *use* it: device pairing + per-device credentials.
+3. **Capability** — *what* they may touch: the allowlist + protected paths.
 
-| Device | Screen | Status |
-|---|---|---|
-| OPPO Find X8 Ultra | ~1440×3168 | ✅ primary test device (real hardware) |
-| iPhone 16 Pro / SE, Pixel 8, Galaxy S24, Redmi Note, iPad Air, iPhone landscape | emulated | ✅ layout verified |
+`trusted-host` and the tailnet are **transport** trusts. They are not
+authentication. Pairing and the filesystem capability layer are.
 
-### Emulated device matrix (headless Chromium, current build)
+## Features
 
-| Device | Screen | Sidebar | ☰ ball | Workbench panel | Overflow |
-|---|---|---|---|---|---|
-| iPhone 16 Pro | 402×874 | collapsed | shown | 386px (96vw) | none |
-| iPhone SE (small) | 375×667 | collapsed | shown | 360px (96vw) | none |
-| Pixel 8 | 412×915 | collapsed | shown | 396px (96vw) | none |
-| Galaxy S24 | 360×780 | collapsed | shown | 346px (96vw) | none |
-| Redmi Note (small Android) | 360×640 | collapsed | shown | 346px (96vw) | none |
-| iPad Air (tablet) | 820×1180 | 56px rail | hidden | 430px (cap) | none |
-| iPhone 16 Pro (landscape) | 874×402 | 56px rail | hidden | 430px (cap) | none |
+- **One-click deploy (auto-installs prerequisites)** — `install.ps1` installs
+  missing Node.js / Tailscale (winget), guides the one-time Tailscale sign-in,
+  writes the launcher, enables HTTPS Serve, installs the plugin, registers
+  auto-start on login.
+- **Walk-on-LAN** — a second forwarder binds the PC's LAN IP (detected fresh at
+  each launch, added to `--trusted-host`); on the same Wi-Fi the phone can skip
+  Tailscale entirely: `http://192.168.x.x:3080`. `/remfs` stays device-authenticated.
+- **Persistent plugin** — loader entry; host channel registers at startup, the
+  client module loads on every page. No re-running after refresh.
+- **Device pairing & management** — one-time pairing code (10 min TTL, single
+  use); list / revoke / revoke-all devices; credentials stored only as hashes.
+- **Mobile-first workbench** — New Session / Files tabs, breadcrumbs, preview /
+  edit / upload / download, workspace badges, floating ball, auto-collapsed
+  sidebar, bilingual UI (EN/zh).
+- **Host-enforced protected paths** — system dirs, AppData, credential/key files
+  (`.credentials.yaml`, `.ssh`, `.aws`, `.gnupg`, `.env`, `id_rsa`, `*.pem` …)
+  and private data dirs (WeChat/WPS) are blocked regardless of the allowlist.
 
-Screenshots: [`docs/device-tests/`](docs/device-tests/)
+## Security model
 
-Layout is fluid (CSS grid / clamp-friendly) — phones collapse the sidebar and use the floating ☰ ball; tablets/landscape keep the 56px rail. Real-device testing on more models is planned — open an issue with your device model + screen size and any layout problem you see.
+- **Tailscale ≠ authentication.** It proves *which network* you are on, not
+  *who* you are. Device pairing is the application boundary.
+- **trusted-host ≠ authentication.** It is the browser-trust fence (Host header +
+  cross-site checks). Pairing is the boundary.
+- **The filesystem allowlist is the primary file-permission boundary.** Remote
+  clients can only *narrow* it; widening (`C:\`, new drives) requires editing
+  `.remfs-roots.json` on the PC.
+- **Path escape is defended twice**: raw paths with `..`/UNC are rejected, and
+  the canonical realpath must stay inside the allowlist (symlink/junction
+  escapes fail).
+- See [SECURITY.md](SECURITY.md) for the full threat model (what we do and do
+  not protect).
 
-## Requirements
+## Comparison
 
-| Item | Notes |
-|---|---|
-| Windows 10/11 | 64-bit; winget available (built-in on Win11) |
-| Node.js ≥ 18 | **auto-installed** by the one-click deploy if missing |
-| Tailscale | **auto-installed** by the one-click deploy; you only need your own (free) Tailscale account — [tailscale.com](https://tailscale.com) |
-| HTTPS Certificates | tailnet admin: https://login.tailscale.com/admin/dns → Enable HTTPS Certificates |
-| DeepSeek Harness | run `npx dsh web` once (to populate the npx cache) |
+| | Official DSH | dsh-web-ui | this project |
+|---|---|---|---|
+| Mobile experience | none (loopback) | replacement mobile UI | **native UI kept**, workbench bridge |
+| Pairing / device auth | — | QR + one-time token | pairing + per-device credentials + revoke |
+| File access | local only | desktop right panel | phone-side bridge (browse/edit/upload/download) |
+| Workspace control | local | sessions + messages | start/resume agent in any folder |
+| Network | localhost | LAN QR / cloudflared | Tailscale (HTTPS/IP) + LAN direct |
+| Positioning | the harness | UI/skin enhancement suite | **secure remote workspace & filesystem bridge** |
 
-## Install from npm
+Both community projects are welcome additions; they simply aim at different
+things — dsh-web-ui re-skins/enhances the UI, this project makes the harness a
+remotely usable work environment without a new frontend.
 
-The plugin is published on npm as **[@zetaluolang/remfs-persistent](https://www.npmjs.com/package/@zetaluolang/remfs-persistent)**. If you already have a `dsh web` profile:
+## Installation
+
+**Advanced users (npm):**
 
 ```bash
-# 1. install the package into the web profile
 dsh plugin --profile web add @zetaluolang/remfs-persistent
-
-# 2. register it as a loader row (append to %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml)
-# - insert:
-#     - id: remfs-persistent
-#       name: '@zetaluolang/remfs-persistent'
-#       inject: [connection, fs]
-
-# 3. restart dsh web, then open the GUI — the workbench appears in the session header
+# append to %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml:
+#   - insert:
+#       - id: remfs-persistent
+#         name: '@zetaluolang/remfs-persistent'
+#         inject: [connection, fs]
+# restart dsh web
 ```
 
-Or use the one-click deploy below, which does all of this automatically.
+**Windows users (one-click):** double-click **`一键部署.cmd`** — it
+auto-installs Node.js + Tailscale, guides the Tailscale sign-in, writes the
+launcher, enables HTTPS Serve, installs the plugin and prints the phone URLs
+(HTTPS, Tailscale IP, LAN IP).
 
-## Quick start
+### First use on the phone (pairing)
 
-1. Double-click **`一键部署.cmd`** on the PC (right-click → Run as administrator; you will need it for the auto-installs);
-2. The script auto-installs **Node.js** and **Tailscale** if missing (click **Yes** on any UAC prompt) — this needs network, give it a minute;
-3. If Tailscale is not signed in yet, the script opens the login page and **waits for you**: log in with your own (free) Tailscale account, and also install the Tailscale app on your **phone** with the same account. Press ENTER when done;
-4. The script then writes `%USERPROFILE%\.dsh\launcher\start_harness.ps1`, enables HTTPS Serve, installs the persistent plugin into `%USERPROFILE%\.dsh\profiles\web`, and prints the phone URL;
-5. Phone: open the Tailscale app (**Connected**) → open the printed `https://...ts.net`;
-6. It auto-starts on login afterwards. Manual control:
-   - start: `%USERPROFILE%\.dsh\launcher\start_harness.ps1`
-   - restart: `%USERPROFILE%\.dsh\launcher\restart_harness_once.ps1`
-   - stop: `%USERPROFILE%\.dsh\launcher\stop_harness.ps1` (also stops keep-awake so the PC can sleep)
+1. Open the phone URL (`https://<pc-name>.<tailnet>.ts.net`, or the LAN URL on
+   the same Wi-Fi).
+2. The workbench shows the **pairing screen**.
+3. On the PC, read the pairing code from
+   `%USERPROFILE%\.dsh\remfs-pairing.txt` (or the harness log).
+4. Enter the code + a device name on the phone → paired. Credentials are stored
+   on the phone; the PC stores only the hash.
+5. Revoke devices anytime from the workbench ⋯ → Devices.
 
-### What install.ps1 does
+## Threat model
 
-- Detects the Tailscale IP (`tailscale ip -4`) and MagicDNS name, fills the template placeholders into `start_harness.ps1`;
-- Auto-locates the `dsh` entry in the npx cache (the `_npx` hash dir changes between installs — never hardcoded);
-- `tailscale serve --bg http://127.0.0.1:3080` → HTTPS;
-- Installs `remfs-persistent` (host RPC channel + browser module) into the web profile:
-  - source → `profiles\web\vendor\remfs-persistent\`, linked/copied to `node_modules\@zetaluolang\remfs-persistent`;
-  - idempotently writes the loader entry into `profiles\web\cordis.patch.yml` (with `inject: [connection, fs]`);
-- Scripts are installed to `%USERPROFILE%\.dsh\launcher\` (**not inside Documents** — see Security).
+We defend against: unauthenticated RPC, remote allowlist widening, path escape,
+credential theft at rest, accidental LAN/public exposure of the GUI.
 
-## ⚠️ Security notes (please read)
-
-- **No login / password / 2FA.** The trust boundary of the GUI and the file plugin is **"any device that can reach your tailnet"**. Any tailnet member can read/write your files and drive the agent without authentication. **Do not share your tailnet, do not add unknown devices, and remove a lost phone from the tailnet admin console immediately.**
-- **The allowed-roots allowlist is a UI guard, not a security boundary.** It can be expanded to any path from the workbench.
-- **Host-enforced protected paths (cannot be bypassed):** system dirs (`Windows`, `System Volume Information`, `$Recycle.Bin`, `Program Files`, `ProgramData`, …), credential/key files (`.credentials.yaml`, `.ssh`, `id_rsa`, `*.pem/.key/.pfx`, `ntuser.dat`, system hive files on the C: root), and private data dirs (`xwechat_files`, `KingsoftData`, `WPSCloudSvr`, `Tencent Files`). These stay blocked even if the allowlist is expanded to `C:\`. Registered workspaces located inside a protected area remain reachable.
-- **DeepSeek API key** is stored in plaintext at `%USERPROFILE%\.dsh\.credentials.yaml` — protected by the deny list; never put that file anywhere that gets uploaded.
-- New sessions default to restricted permissions (`workspace-write` + confirmation for writes); keep it that way.
-- The plain-HTTP fallback (`http://<IP>:3080`) is tailnet-only (WireGuard already encrypts); prefer HTTPS.
-
-## Repository layout
-
-```
-dsh-remote/
-├─ 一键部署.cmd              one-click deploy entry
-├─ install.ps1               deploy script (detect / generate / install)
-├─ start_harness.template.ps1  launcher template (placeholders filled by install.ps1)
-├─ tailscale_forward.js      TCP forwarder (tailnet IP → 127.0.0.1:3080)
-├─ restart_harness.ps1       restart (kill :3080 listeners, relaunch)
-├─ stop_harness.ps1          stop harness + forwarder + keep-awake
-├─ keep_awake.ps1            keep-awake (ES_SYSTEM_REQUIRED loop)
-└─ remfs-persistent/         the persistent plugin (host RPC + browser workbench)
-   ├─ package.json           dsh.client manifest + exports
-   ├─ lib/host.js            /remfs RPC channel (trust fence + allowlist + protected paths)
-   └─ lib/client.js          phone workbench UI (session/files tabs, toast, floating ball)
-```
+We do not (yet) defend against: the harness GUI `/api` itself having no user
+login (pairing protects `/remfs`, not the GUI — keep the network boundary
+tight), a compromised host, or a compromised Tailscale account. Details in
+[SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Phone can't open the page | Phone Tailscale **Connected**? PC harness running (`start_harness.ps1`, :3080 listening)? |
-| 403 on the phone | Host header not in the trust list — HTTPS: use `<pc-name>.<tailnet>.ts.net`; HTTP: the PC's Tailscale IP |
-| HTTPS certificate error | Enable HTTPS Certificates in the tailnet admin, then re-run install.ps1 |
-| Some folders not browsable on phone | Not in the allowlist (add via "manage allowed dirs"); system/credential/private dirs are hard-blocked |
-| Plugin missing after refresh | Refresh again — the persistent module loads with every page (no "run" needed) |
-| Plugin never appears after `dsh plugin add` | You must also append the loader row to `cordis.patch.yml` (`dsh plugin add` only installs the dependency) and restart `dsh web` |
-| Workbench button missing | Open a conversation first — the header button lives in the session header; it also appears under Settings |
-| `npm.ps1` blocked by execution policy | Use `npm.cmd` instead, or `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
-| `npm view` 404s right after a publish | CDN edge cache — wait a minute or query with `Cache-Control: no-cache`; the publish itself succeeded (PUT 200) |
-| Launch fails after a dsh upgrade | The npx cache path changed — re-run `一键部署.cmd` to re-detect |
+| Phone shows the pairing screen forever | Read the code from `%USERPROFILE%\.dsh\remfs-pairing.txt`; codes expire after 10 min — restart the harness to generate a new one |
+| Device revoked / re-pairing fails | Pairing codes are single-use; restart the harness for a fresh code |
+| Phone gets 403 | Use the printed HTTPS/Tailscale/LAN URL; the GUI must run with those hosts trusted (one-click deploy does it) |
+| LAN URL unreachable | Phone must be on the same Wi-Fi; re-run the launcher so the current LAN IP is detected |
+| `npm.ps1` blocked by execution policy | Use `npm.cmd`, or `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| `npm view` 404s right after a publish | CDN edge cache — wait a minute or query with `Cache-Control: no-cache` |
+| Plugin never appears after `dsh plugin add` | You must also append the loader row and restart `dsh web` |
+| PC sleeps | keep_awake + power plan are handled by the deploy; see `keep_awake.ps1` |
+
+## Tested devices
+
+- OPPO Find X8 Ultra (real hardware).
+- Emulated matrix: iPhone 16 Pro/SE, Pixel 8, Galaxy S24, Redmi Note, iPad Air,
+  iPhone landscape — sidebar collapse, floating ball, panel width, no overflow.
+  See `docs/device-tests/`.
 
 ## Roadmap
 
-- [x] Tailscale HTTPS + forwarder access
+- [x] Tailscale HTTPS + IP access, walk-on-LAN
 - [x] Persistent plugin (no per-session run)
-- [x] Bilingual UI (EN / 中文)
-- [x] Host-enforced protected-path deny list
+- [x] Device pairing + credential auth + revocation
+- [x] Capability-bounded allowlist + protected paths + path-escape tests
+- [x] Bilingual UI, security tests, CI
 - [ ] More device resolutions validation
 - [ ] Tailscale ACL hardening guide
-- [ ] English README polish / screenshots
+- [ ] Upstream contributions (see below)
 
 ## License
 
