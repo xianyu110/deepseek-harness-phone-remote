@@ -155,14 +155,18 @@ if ($lanIP -and (Test-HarnessRunning) -and (Test-Path $forwardBin)) {
 }
 
 # Keep the system awake while the harness runs (no admin, no power-plan change).
+# The pid file is trusted ONLY when the process command line matches the
+# deployed keep_awake.ps1 (a stale/reused pid must not block a fresh start).
 $keepAwakeBin = Join-Path $PSScriptRoot "keep_awake.ps1"
 $keepAwakePid = Join-Path $env:TEMP "dsh_keep_awake.pid"
 $keepAwakeAlive = $false
-if (Test-Path $keepAwakePid) {
+if (Get-Command Test-KeepAwakeOwned -ErrorAction SilentlyContinue) {
+    $keepAwakeAlive = Test-KeepAwakeOwned -PidFile $keepAwakePid -KeepAwakeBin $keepAwakeBin
+} elseif (Test-Path $keepAwakePid) {
     $kp = Get-Content $keepAwakePid -ErrorAction SilentlyContinue
     if ($kp -match '^\d+$') {
-        $kpProc = Get-Process -Id ([int]$kp) -ErrorAction SilentlyContinue
-        if ($kpProc) { $keepAwakeAlive = $true }
+        $kpProc = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$kp)" -ErrorAction SilentlyContinue
+        if ($kpProc -and $kpProc.CommandLine -and $kpProc.CommandLine.Contains($keepAwakeBin)) { $keepAwakeAlive = $true }
     }
 }
 if ($ready -and -not $keepAwakeAlive -and (Test-Path $keepAwakeBin)) {

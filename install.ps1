@@ -210,8 +210,13 @@ if ($LASTEXITCODE -eq 0 -or $serveOut -match "Available within your tailnet") {
 # ---------- 5. print phone URLs ----------
 Write-Host ""
 Write-Host "================== DONE ==================" -ForegroundColor Green
-Write-Host "Phone URL (recommended):" -ForegroundColor Green
-Write-Host "   https://$tsName" -ForegroundColor White
+if ($tsName -match '\.ts\.net$') {
+    Write-Host "Phone URL (recommended):" -ForegroundColor Green
+    Write-Host "   https://$tsName" -ForegroundColor White
+} else {
+    Write-Host "Phone URL (recommended):" -ForegroundColor Green
+    Write-Host "   (HTTPS unavailable - no Tailscale MagicDNS name; enable HTTPS Certificates in the tailnet and re-run, or use the fallback below)" -ForegroundColor Yellow
+}
 Write-Host "Fallback (plain HTTP):" -ForegroundColor Green
 Write-Host "   http://$tsIP`:3080" -ForegroundColor White
 Write-Host ""

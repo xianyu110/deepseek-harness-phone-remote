@@ -224,10 +224,11 @@ test('RPC contract: envelope shapes, auth gate, traversal, roundtrip', async (t)
     assert.equal(trav.ok, false)
     assert.equal(trav.error.code, 'path-traversal')
 
-    // read/write roundtrip inside the root
-    const w = await handler('write', { ...base, path: root + '\\sub\\new.txt', content: 'data123' })
+    // read/write roundtrip inside the root (path.join => native separators)
+    const subFile = path.join(root, 'sub', 'new.txt')
+    const w = await handler('write', { ...base, path: subFile, content: 'data123' })
     assert.equal(w.ok, true)
-    const rd = await handler('read', { ...base, path: root + '\\sub\\new.txt' })
+    const rd = await handler('read', { ...base, path: subFile })
     assert.equal(rd.ok, true)
     assert.equal(rd.value.kind, 'text')
     assert.equal(rd.value.text, 'data123')
@@ -236,7 +237,7 @@ test('RPC contract: envelope shapes, auth gate, traversal, roundtrip', async (t)
     await fsp.writeFile(path.join(root, '.credentials.yaml'), 'k: v')
     const prot = await listCall(handler, { ...base, path: root })
     assert.equal(prot.ok, true)
-    const protRead = await handler('read', { ...base, path: root + '\\.credentials.yaml' })
+    const protRead = await handler('read', { ...base, path: path.join(root, '.credentials.yaml') })
     assert.equal(protRead.ok, false)
     assert.equal(protRead.error.code, 'path-protected')
 
@@ -245,7 +246,7 @@ test('RPC contract: envelope shapes, auth gate, traversal, roundtrip', async (t)
     await fsp.writeFile(outside, 'secret')
     try {
       await fsp.symlink(outside, path.join(root, 'link.txt'))
-      const esc = await handler('read', { ...base, path: root + '\\link.txt' })
+      const esc = await handler('read', { ...base, path: path.join(root, 'link.txt') })
       assert.equal(esc.ok, false)
       assert.equal(esc.error.code, 'path-outside-allowed')
     } catch { /* symlink unsupported on this platform; skip */ }
@@ -257,12 +258,46 @@ test('ensureWorkspace: raw path traversal rejected, resolved path capability enf
   try {
     const A = await pair('device-a')
     const base = { deviceId: A.deviceId, credential: A.credential }
-    const trav = await handler('ensureWorkspace', { ...base, path: root + '\\..\\..\\Windows' })
+    const trav = await handler('ensureWorkspace', { ...base, path: root + '/../../../Windows' })
     assert.equal(trav.error.code, 'path-traversal')
     const outside = await handler('ensureWorkspace', { ...base, path: dir }) // sibling of root
     assert.equal(outside.error.code, 'path-outside-allowed')
-    const ok = await handler('ensureWorkspace', { ...base, path: root + '\\sub' })
+    const ok = await handler('ensureWorkspace', { ...base, path: path.join(root, 'sub') })
     assert.equal(ok.ok, true)
     assert.ok(ok.value.workspaceId)
+  } finally { await teardown(t, dir) }
+})
+
+test('fail closed: no workspace root must NEVER grant whole-drive access', async (t) => {
+  const { dir } = await setup()
+  try {
+    const secFile = path.join(dir, 'sec.json')
+    const noRootAdapter = {
+      workspaceRoot: () => { throw new Error('no safe workspace root') },
+      policy: () => undefined,
+      readAllowedFile: async () => ({ exists: false }),
+      writeAllowedFile: async () => {},
+      resolvePath: async (p) => ({ target: { key: p, display: p } }),
+      processPath: (t2) => String(t2.key),
+      stat: async () => undefined,
+      listDir: async () => [],
+      readText: async () => 'x',
+      readBytes: async () => new Uint8Array(),
+      writeText: async () => {},
+      listWorkspaces: async () => [],
+      resolveWorkspaceByPath: async () => undefined,
+      createWorkspace: async () => ({ id: 'w' }),
+    }
+    const h = createDispatcher(noRootAdapter, { securityFile: secFile })
+    const code = await ensurePairingCode(secFile)
+    const A = await pairDevice(code, 'a', secFile)
+    // listing with no path must fail closed - never fall back to a drive root
+    const r = await h('list', { deviceId: A.deviceId, credential: A.credential, path: '' })
+    assert.equal(r.ok, false)
+    assert.equal(r.error.code, 'internal')
+    assert.ok(!JSON.stringify(r.value || {}).includes('C:\\'))
+    // explicit C:\ path must not be trusted either
+    const r2 = await h('list', { deviceId: A.deviceId, credential: A.credential, path: 'C:\\' })
+    assert.equal(r2.ok, false)
   } finally { await teardown(t, dir) }
 })

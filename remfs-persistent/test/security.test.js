@@ -47,6 +47,22 @@ test('isWithin: case-insensitive matching', () => {
   assert.equal(isWithin('C:\\Users\\zeta\\Other', ['C:\\Users\\zeta\\Documents']), false)
 })
 
+test('normPath: mixed separators (C:\\ vs C:/) have identical security semantics', () => {
+  assert.equal(normPath('C:\\Users\\x\\Documents\\a'), normPath('C:/Users/x/Documents/a'))
+  assert.equal(normPath('C:/Users/x/Documents'), 'c:\\users\\x\\documents')
+  // containment is separator-agnostic in both directions
+  assert.equal(isWithin('C:/Users/x/Documents/a', ['C:\\Users\\x\\Documents']), true)
+  assert.equal(isWithin('C:\\Users\\x\\Documents\\a', ['C:/Users/x/Documents']), true)
+  assert.equal(isWithin('C:/Users/x/Other', ['C:\\Users\\x\\Documents']), false)
+  // protection is separator-agnostic
+  assert.equal(deniedPath('C:/Users/x/Documents/.credentials.yaml', []), true)
+  assert.equal(deniedPath('C:\\Users\\x\\Documents\\.credentials.yaml', []), true)
+  assert.equal(deniedPath('C:/Users/x/Documents/xwechat_files/a', []), true)
+  // traversal detection is separator-agnostic
+  assert.equal(hasTraversal('C:/a/../b'), true)
+  assert.equal(hasTraversal('C:\\a\\..\\b'), true)
+})
+
 test('protected credential access is denied', () => {
   const wp = [] // no registered workspace escape
   for (const p of [

@@ -88,3 +88,25 @@ function Sync-RemfsPlugin {
     }
     return $true
 }
+
+# True only when the pid file points to a LIVE process whose command line
+# contains the exact deployed keep_awake.ps1 path. A stale/reused pid must
+# never be trusted or killed blindly.
+function Test-KeepAwakeOwned {
+    param([string]$PidFile, [string]$KeepAwakeBin)
+    if (-not $PidFile -or -not (Test-Path $PidFile)) { return $false }
+    $kp = Get-Content $PidFile -ErrorAction SilentlyContinue
+    if ($kp -notmatch '^\d+$') { return $false }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$kp)" -ErrorAction SilentlyContinue
+    return ($proc -and $proc.CommandLine -and $KeepAwakeBin -and $proc.CommandLine.Contains($KeepAwakeBin))
+}
+
+# Kill keep_awake only when ownership is verified; always clean up the pid file.
+function Stop-OwnedKeepAwake {
+    param([string]$PidFile, [string]$KeepAwakeBin)
+    if (Test-KeepAwakeOwned -PidFile $PidFile -KeepAwakeBin $KeepAwakeBin) {
+        $kp = Get-Content $PidFile -ErrorAction SilentlyContinue
+        if ($kp -match '^\d+$') { Stop-Process -Id ([int]$kp) -Force -ErrorAction SilentlyContinue }
+    }
+    Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}

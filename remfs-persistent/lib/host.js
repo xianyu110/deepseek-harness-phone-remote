@@ -8,6 +8,9 @@
 // resolves undefined and the channel never registers.
 import { ensurePairingCode } from './security.js'
 import { createDispatcher } from './dispatch.js'
+import { access, unlink } from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
 
 export default {
   inject: ['connection', 'fs'],
@@ -23,6 +26,10 @@ export default {
       return
     }
 
+    // Resolve the workspace root ONCE at apply time. This is a security
+    // decision: we NEVER fall back to a whole drive (e.g. C:\). If neither the
+    // sandbox policy nor the workspace registry can provide a safe root, the
+    // plugin fails closed and the /remfs channel is NOT registered.
     const workspaceRoot = () => {
       const sp = ctx.get('sandboxPolicy')
       if (sp && typeof sp.workspaceRoot === 'string' && sp.workspaceRoot) return sp.workspaceRoot
@@ -31,11 +38,23 @@ export default {
         const list = wr.list()
         if (list && list.length > 0 && list[0] && list[0].path) return list[0].path
       }
-      return 'C:\\'
+      throw new Error('no safe workspace root (sandboxPolicy/workspaceRegistry unavailable)')
+    }
+
+    let resolvedRoot = null
+    try {
+      resolvedRoot = workspaceRoot()
+    } catch (e) {
+      console.log('[remfs-persistent] host apply skipped (fail closed): ' + String((e && e.message) || e))
+      return
+    }
+    if (typeof resolvedRoot !== 'string' || !resolvedRoot) {
+      console.log('[remfs-persistent] host apply skipped (fail closed): empty workspace root')
+      return
     }
 
     const adapter = {
-      workspaceRoot,
+      workspaceRoot: () => resolvedRoot,
       policy: () => {
         const sp = ctx.get('sandboxPolicy')
         if (sp && typeof sp.resolve === 'function') {
@@ -97,6 +116,28 @@ export default {
     }).catch((e) => {
       console.log('[remfs-persistent] pairing code unavailable: ' + String(e))
     })
+
+    // Pairing-rotation control: refresh_pairing.ps1 must NOT mutate the store
+    // (single-writer: only THIS host process writes remfs-security.json). It
+    // drops a flag file and we rotate here, under our own store lock.
+    ctx.effect(() => {
+      const flag = path.join(os.homedir(), '.dsh', 'remfs-pairing-rotate.flag')
+      const poll = async () => {
+        try {
+          await access(flag)
+        } catch { return }
+        try { await unlink(flag) } catch { /* ignore */ }
+        try {
+          const plain = await ensurePairingCode()
+          console.log('[remfs-persistent] pairing code rotated: ' + (plain || '(unchanged)') + ' (see ~/.dsh/remfs-pairing.txt)')
+        } catch (e) {
+          console.log('[remfs-persistent] pairing rotation failed: ' + String((e && e.message) || e))
+        }
+      }
+      const handle = setInterval(poll, 8000)
+      return () => { try { clearInterval(handle) } catch { /* ignore */ } }
+    }, 'remfs pairing rotation watcher')
+
     console.log('[remfs-persistent] host applied: /remfs channel registered')
   }
 }

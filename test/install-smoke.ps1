@@ -56,3 +56,17 @@ try {
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# 5) install.ps1 must never print a blank "https://" phone URL when the
+#    Tailscale MagicDNS name is unavailable (65c52ca audit item 6): the print
+#    must be guarded by a tsName validity check, and appear exactly once.
+$httpsHits = [regex]::Matches($install, 'https://\$tsName')
+if ($httpsHits.Count -ne 1) {
+    Write-Error "install.ps1 must print the https phone URL exactly once (guarded); found $($httpsHits.Count)"
+    exit 1
+}
+if ($install -notmatch '(?s)if \(\$tsName -match ''\\\.ts\\\.net\$''\) \{.*?https://\$tsName') {
+    Write-Error "install.ps1 phone-URL print must be guarded by a valid tsName check"
+    exit 1
+}
+Write-Host "install smoke: OK (phone URL guarded, no blank https://)"

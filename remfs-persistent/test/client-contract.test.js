@@ -15,6 +15,13 @@ import { ensurePairingCode, pairDevice } from '../lib/security.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLIENT_SRC = readFileSync(path.join(HERE, '..', 'lib', 'client.js'), 'utf8')
+const HOST_SRC = readFileSync(path.join(HERE, '..', 'lib', 'host.js'), 'utf8')
+
+test('host source: no whole-drive (C:\\) fallback for the workspace root', () => {
+  assert.doesNotMatch(HOST_SRC, /return 'C:\\\\'|workspaceRoot.*C:\\\\/,
+    'host must fail closed instead of widening the root to the whole drive')
+  assert.match(HOST_SRC, /fail closed/, 'host must contain the fail-closed guard')
+})
 
 test('client source: revoke sends targetDeviceId (never { id })', () => {
   assert.match(CLIENT_SRC, /rpc\('revoke',\s*\{\s*targetDeviceId:\s*id\s*\}/,

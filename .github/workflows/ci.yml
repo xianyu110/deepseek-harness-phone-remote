@@ -20,8 +20,17 @@ jobs:
           for f in host.js client.js security.js dispatch.js; do
             node --check "remfs-persistent/lib/$f"
           done
-      - name: All node tests (security, dispatch, client contract)
-        run: node --test "remfs-persistent/test/*.test.js"
+      - name: All node tests (explicit files, zero-test guard)
+        run: |
+          cd remfs-persistent
+          OUT=$(node --test test/security.test.js test/dispatch.test.js test/client-contract.test.js 2>&1)
+          echo "$OUT"
+          COUNT=$(echo "$OUT" | grep -oP '[#ℹ] tests \K\d+' | head -1)
+          echo "tests executed: ${COUNT:-0}"
+          if [ -z "$COUNT" ] || [ "$COUNT" -lt 20 ]; then
+            echo "::error::zero/suspicious test count (expected >= 20, got ${COUNT:-0}) - CI must never pass with no tests"
+            exit 1
+          fi
       - name: No maintainer-specific paths in deploy scripts
         shell: pwsh
         run: |
@@ -55,8 +64,15 @@ jobs:
       - name: Launcher ownership regression (dummy :3080 + owned-kill)
         shell: pwsh
         run: ./test/launcher-ownership.ps1
-      - name: All node tests on Windows
-        run: cd remfs-persistent && node --test "test/*.test.js"
+      - name: All node tests on Windows (explicit files, zero-test guard)
+        run: |
+          cd remfs-persistent
+          $OUT = node --test test/security.test.js test/dispatch.test.js test/client-contract.test.js 2>&1 | Out-String
+          Write-Host $OUT
+          $m = [regex]::Match($OUT, '[#ℹ] tests (\d+)')
+          $count = if ($m.Success) { [int]$m.Groups[1].Value } else { 0 }
+          Write-Host "tests executed: $count"
+          if ($count -lt 20) { Write-Error "zero/suspicious test count (expected >= 20, got $count)"; exit 1 }
 
   package-smoke:
     runs-on: ubuntu-latest

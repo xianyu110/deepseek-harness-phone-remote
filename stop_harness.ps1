@@ -41,14 +41,23 @@ if ($marker -and (Get-Command Stop-OwnedHarnessStack -ErrorAction SilentlyContin
     }
 }
 
-# 2. keep_awake helper (registered via pid file - it is ours by construction).
+# 2. keep_awake helper: ONLY if the pid's command line matches the deployed
+#    keep_awake.ps1 path (a stale/reused pid is never killed blindly).
 $pidFile = Join-Path $env:TEMP "dsh_keep_awake.pid"
-if (Test-Path $pidFile) {
-    $kp = Get-Content $pidFile -ErrorAction SilentlyContinue
-    if ($kp -match '^\d+$') {
-        Stop-Process -Id ([int]$kp) -Force -ErrorAction SilentlyContinue
+$keepAwakeBin = Join-Path $scriptDir "keep_awake.ps1"
+if (Get-Command Stop-OwnedKeepAwake -ErrorAction SilentlyContinue) {
+    Stop-OwnedKeepAwake -PidFile $pidFile -KeepAwakeBin $keepAwakeBin
+} else {
+    if (Test-Path $pidFile) {
+        $kp = Get-Content $pidFile -ErrorAction SilentlyContinue
+        if ($kp -match '^\d+$') {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$kp)" -ErrorAction SilentlyContinue
+            if ($proc -and $proc.CommandLine -and $proc.CommandLine.Contains($keepAwakeBin)) {
+                Stop-Process -Id ([int]$kp) -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "Owned Harness, forwarder and keep_awake stopped. Tailscale is still up."

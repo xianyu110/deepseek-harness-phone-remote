@@ -53,9 +53,14 @@ export const ERR = {
 
 // ------------------------------------------------------------------- paths
 
-/** Normalize for comparison: lowercase, backslashes, no trailing slash. */
+/**
+ * Normalize a path for SECURITY comparisons: canonicalize every separator
+ * ('/' and '\') to backslash (Windows-first project), lowercase, and strip
+ * trailing separators. Mixed separators (C:/Users/x vs C:\Users\x) must have
+ * identical containment semantics on every platform.
+ */
 export function normPath(p) {
-  return String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+  return String(p || '').replace(/[\\/]/g, '\\').replace(/\\+$/, '').toLowerCase()
 }
 
 /** True when the raw path contains '..' segments or is a UNC path. */

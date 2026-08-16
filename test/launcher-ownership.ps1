@@ -75,6 +75,49 @@ try {
         exit 1
     }
 
+    # --- 4) keep_awake ownership: a stale/reused pid is never trusted or
+    #        killed; a process whose cmdline contains the keep_awake bin IS. ---
+    $keepAwakeBinFake = "C:\Fake\Not\Our\Path\keep_awake.ps1"
+    $keepAwakePid = Join-Path $env:TEMP ("remfs-kap-" + [guid]::NewGuid().ToString("N") + ".pid")
+    $foreign2 = $null
+    $kap = $null
+    try {
+        # 4a) pid file pointing at a FOREIGN process (cmdline lacks the bin path)
+        $foreign2 = New-DummyServer -Port 3126 -Marker "not-the-keep-awake-bin"
+        [System.IO.File]::WriteAllText($keepAwakePid, "$($foreign2.Proc.Id)")
+        if (Test-KeepAwakeOwned -PidFile $keepAwakePid -KeepAwakeBin $keepAwakeBinFake) {
+            Write-Error "stale keep_awake pid (foreign process) reported as owned"
+            exit 1
+        }
+        Stop-OwnedKeepAwake -PidFile $keepAwakePid -KeepAwakeBin $keepAwakeBinFake
+        if (-not (Get-Process -Id $foreign2.Proc.Id -ErrorAction SilentlyContinue)) {
+            Write-Error "FOREIGN process killed by Stop-OwnedKeepAwake (stale pid)!"
+            exit 1
+        }
+        if (Test-Path $keepAwakePid) {
+            Write-Error "Stop-OwnedKeepAwake must remove the pid file"
+            exit 1
+        }
+
+        # 4b) a keep_awake-like process whose cmdline contains the bin path IS killed
+        $kap = New-DummyServer -Port 3127 -Marker $keepAwakeBinFake
+        [System.IO.File]::WriteAllText($keepAwakePid, "$($kap.Proc.Id)")
+        if (-not (Test-KeepAwakeOwned -PidFile $keepAwakePid -KeepAwakeBin $keepAwakeBinFake)) {
+            Write-Error "owned keep_awake process not identified (cmdline must contain bin path)"
+            exit 1
+        }
+        Stop-OwnedKeepAwake -PidFile $keepAwakePid -KeepAwakeBin $keepAwakeBinFake
+        if (Get-Process -Id $kap.Proc.Id -ErrorAction SilentlyContinue) {
+            Write-Error "owned keep_awake process survived Stop-OwnedKeepAwake"
+            exit 1
+        }
+        Write-Host "keep_awake ownership: OK (stale pid never trusted/killed, owned killed)"
+    } finally {
+        if ($foreign2) { Stop-Process -Id $foreign2.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $foreign2.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($kap) { Stop-Process -Id $kap.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $kap.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-Item $keepAwakePid -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "launcher ownership: OK (foreign not trusted/killed, owned killed, forwarder IP derived)"
 } finally {
     if ($foreign) { Stop-Process -Id $foreign.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $foreign.Dir -Recurse -Force -ErrorAction SilentlyContinue }
