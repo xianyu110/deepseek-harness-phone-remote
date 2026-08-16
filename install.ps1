@@ -29,7 +29,22 @@ if (-not (Test-Path $node)) {
         exit 1
     }
 }
-Write-Host "[OK] Node.js found"
+# Validate the actual Node version: upstream DeepSeek Harness requires
+# ^22.19.0 || >=24.0.0 (node --version, not just the executable existing).
+$nodeVer = (& $node --version 2>$null | Out-String).Trim()
+if ($nodeVer -notmatch '^v?(\d+)\.(\d+)\.(\d+)$') {
+    Write-Host "[X] Could not read the Node.js version from '$node'." -ForegroundColor Red
+    exit 1
+}
+$major = [int]$Matches[1]
+$minor = [int]$Matches[2]
+$nodeOk = ($major -eq 22 -and $minor -ge 19) -or ($major -ge 24)
+if (-not $nodeOk) {
+    Write-Host "[X] Node.js $nodeVer is not supported - DeepSeek Harness needs ^22.19.0 || >=24.0.0." -ForegroundColor Red
+    Write-Host "    Install a supported version from https://nodejs.org and re-run." -ForegroundColor Red
+    exit 1
+}
+Write-Host "[OK] Node.js found: $nodeVer (supported)"
 
 # Tailscale: auto-install via winget when missing, then guide the one-time sign-in.
 $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
@@ -79,13 +94,28 @@ if (-not $tsIP) {
     Write-Host ""
     try { Start-Process "https://login.tailscale.com/start" } catch { }
     Read-Host "  Press ENTER after you have signed in on this PC"
-    try { $tsIP = (& $tsCli ip -4 2>$null | Select-Object -First 1).Trim() } catch { }
+    # Re-read BOTH the IP and the MagicDNS name after sign-in: the DNSName is
+    # not available before the first login.
+    try {
+        $tsIP = (& $tsCli ip -4 2>$null | Select-Object -First 1).Trim()
+        $json = & $tsCli status --json 2>$null | Out-String
+        if ($json) {
+            $obj = $json | ConvertFrom-Json
+            $tsName = ($obj.Self.DNSName -replace '\.$', '')
+        }
+    } catch { }
 }
 if (-not $tsIP) {
     Write-Host "[!] Still no Tailscale IP. Enter it manually (look in the Tailscale app):" -ForegroundColor Yellow
     $tsIP = Read-Host "    Tailscale IP (e.g. 100.x.y.z)"
 }
-if (-not $tsName) { $tsName = $env:COMPUTERNAME + ".tailnet.ts.net" }
+# Never fabricate a DNS name: a trusted host entry must come from Tailscale
+# itself (tailscale status --json / Self.DNSName). Without a real name the
+# HTTPS trusted-host is simply omitted (the template handles an empty name).
+if ($tsName -notmatch '\.ts\.net$') {
+    Write-Host "[!] No valid Tailscale MagicDNS name - the HTTPS trusted-host will be skipped (HTTPS URL unavailable until signed in)." -ForegroundColor Yellow
+    $tsName = ""
+}
 Write-Host "[OK] Tailscale IP: $tsIP"
 Write-Host "[OK] MagicDNS name: $tsName"
 
@@ -97,7 +127,7 @@ $ws  = Join-Path $env:USERPROFILE "Documents"
 $scriptDir = Join-Path $env:USERPROFILE ".dsh\launcher"
 New-Item -ItemType Directory -Force -Path $scriptDir | Out-Null
 
-foreach ($f in @("tailscale_forward.js", "restart_harness.ps1", "stop_harness.ps1", "keep_awake.ps1")) {
+foreach ($f in @("tailscale_forward.js", "restart_harness.ps1", "stop_harness.ps1", "keep_awake.ps1", "harness-common.ps1")) {
     if (Test-Path (Join-Path $src $f)) {
         Copy-Item (Join-Path $src $f) (Join-Path $scriptDir $f) -Force
     }
@@ -137,10 +167,14 @@ $profileDir = Join-Path (Join-Path $env:USERPROFILE ".dsh") "profiles\web"
 $pkgSrc = Join-Path $src "remfs-persistent"
 if ((Test-Path $profileDir) -and (Test-Path $pkgSrc)) {
     $pkgDst = Join-Path $profileDir "vendor\remfs-persistent"
-    New-Item -ItemType Directory -Force -Path (Join-Path $pkgDst "lib") | Out-Null
+    # Copy the WHOLE package (lib/ is copied as a directory, so new lib modules
+    # like security.js are never missed by a per-file list).
+    New-Item -ItemType Directory -Force -Path $pkgDst | Out-Null
     Copy-Item (Join-Path $pkgSrc "package.json") (Join-Path $pkgDst "package.json") -Force
-    Copy-Item (Join-Path $pkgSrc "lib\host.js") (Join-Path $pkgDst "lib\host.js") -Force
-    Copy-Item (Join-Path $pkgSrc "lib\client.js") (Join-Path $pkgDst "lib\client.js") -Force
+    Copy-Item (Join-Path $pkgSrc "lib") (Join-Path $pkgDst "lib") -Recurse -Force
+    if (Test-Path (Join-Path $pkgSrc "README.md")) {
+        Copy-Item (Join-Path $pkgSrc "README.md") (Join-Path $pkgDst "README.md") -Force
+    }
 
     # Link (or copy) into the profile node_modules so the loader can resolve it.
     $nmPkg = Join-Path $profileDir "node_modules\@zetaluolang\remfs-persistent"

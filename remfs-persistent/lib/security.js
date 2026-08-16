@@ -9,8 +9,13 @@
 //
 // Only SHA-256 hashes of credentials are persisted. The pairing code is
 // one-time and short-lived.
+//
+// Concurrency: every store access runs through a per-file mutation lock and
+// the store file is replaced atomically (tmp + rename), so concurrent
+// verifyDevice/revokeDevice/pairDevice calls cannot resurrect a revoked
+// credential or double-consume a pairing code.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, access } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
@@ -110,6 +115,20 @@ export function canSetRoots(next, current) {
   return next.every((r) => isWithin(r, current))
 }
 
+/**
+ * Breadcrumb segments for a path. `path` is captured eagerly per segment (no
+ * shared mutable accumulator), so each crumb navigates to ITS OWN prefix.
+ * Mirrored in lib/client.js (the browser module cannot import this file).
+ */
+export function buildCrumbs(p) {
+  const segs = String(p || '').split(/[\\/]+/).filter(Boolean)
+  let acc = ''
+  return segs.map((seg, i) => {
+    acc = i === 0 ? seg : acc + '\\' + seg
+    return { label: seg, path: acc, last: i === segs.length - 1 }
+  })
+}
+
 // -------------------------------------------------------------------- auth
 
 function sha256(s) {
@@ -135,6 +154,11 @@ export function parsePairingCode(code) {
 
 export const securityFile = () => path.join(os.homedir(), '.dsh', 'remfs-security.json')
 
+export const pairingTxtFile = (file = securityFile()) =>
+  path.join(path.dirname(file), 'remfs-pairing.txt')
+
+// ------------------------------------------------------------------ store
+
 async function loadStore(file) {
   try {
     await access(file)
@@ -149,97 +173,141 @@ async function loadStore(file) {
   }
 }
 
+/** Atomic replace: write tmp then rename (same volume => atomic on Windows). */
 async function saveStore(file, store) {
   await mkdir(path.dirname(file), { recursive: true })
   const tmp = file + '.tmp'
   await writeFile(tmp, JSON.stringify(store, null, 2), 'utf8')
-  await writeFile(file, JSON.stringify(store, null, 2), 'utf8')
-  try { await access(tmp); await import('node:fs/promises').then((m) => m.unlink(tmp)) } catch { /* ignore */ }
+  await rename(tmp, file)
+}
+
+/** Serialize every store operation per file so read-modify-write cannot race. */
+const locks = new Map()
+function withStoreLock(file, fn) {
+  const prev = locks.get(file) || Promise.resolve()
+  const next = prev.then(fn, fn)
+  locks.set(file, next.then(() => {}, () => {}))
+  return next
+}
+
+async function writePairingTxt(text) {
+  try {
+    await mkdir(path.dirname(text.file), { recursive: true })
+    await writeFile(text.file, text.body, 'utf8')
+  } catch { /* display is best-effort */ }
+}
+
+function consumedTxt(file, when) {
+  return { file, body: `CONSUMED ${when}\n(restart the harness or run refresh_pairing.ps1 for a new code)\n` }
+}
+
+function freshTxt(file, plain, when) {
+  return { file, body: plain + '\n' + when + '\n' }
 }
 
 /**
- * Ensure a valid, unexpired pairing code exists; returns its plaintext.
- * Writes the code to `<file>.txt` (PC-local, for the human to read) and the
- * hash + expiry into the store.
+ * Ensure a valid, unexpired pairing code exists; regenerates when absent,
+ * expired or already consumed. Returns the plaintext of the fresh code, or
+ * null when the current code is still valid (its plaintext is only
+ * reconstructible from the .txt file).
  */
 export async function ensurePairingCode(file = securityFile()) {
-  const store = await loadStore(file)
-  const now = Date.now()
-  if (store.pairing && store.pairing.expiresAt > now) {
-    // pairing code persists; plaintext is only reconstructible via the .txt file
-    return null
-  }
-  const code = randomToken(16) // 128-bit, one-time, TTL-bounded
-  const plain = formatPairingCode(code)
-  store.pairing = { codeHash: sha256(code), expiresAt: now + PAIRING_TTL_MS }
-  await saveStore(file, store)
-  try {
-    await mkdir(path.dirname(file), { recursive: true })
-    await writeFile(path.join(path.dirname(file), 'remfs-pairing.txt'), plain + '\n' + new Date().toISOString() + '\n', 'utf8')
-  } catch { /* display is best-effort */ }
-  return plain
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    const now = Date.now()
+    if (store.pairing && store.pairing.codeHash && store.pairing.expiresAt > now) {
+      return null
+    }
+    const code = randomToken(16) // 128-bit, one-time, TTL-bounded
+    const plain = formatPairingCode(code)
+    store.pairing = { codeHash: sha256(code), expiresAt: now + PAIRING_TTL_MS }
+    await saveStore(file, store)
+    await writePairingTxt(freshTxt(pairingTxtFile(file), plain, new Date().toISOString()))
+    return plain
+  })
+}
+
+/** Read-only pairing status (for PC-side UI/scripts). */
+export async function pairingStatus(file = securityFile()) {
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    if (!store.pairing || !store.pairing.codeHash) return { present: false }
+    return { present: true, expiresAt: store.pairing.expiresAt, expired: store.pairing.expiresAt < Date.now() }
+  })
 }
 
 /**
- * Consume a pairing code: single use + expiry. On success creates a device
- * and returns its { deviceId, credential }.
+ * Consume a pairing code: strictly single-use + expiry, under the store lock.
+ * On success creates a device and returns { deviceId, credential }; the
+ * consumed code is marked in the .txt so it cannot mislead the user.
  */
 export async function pairDevice(code, deviceName, file = securityFile()) {
-  const store = await loadStore(file)
-  const p = store.pairing
-  if (!p || !p.codeHash) return { error: ERR.PAIRING_INVALID }
-  if (p.expiresAt < Date.now()) return { error: ERR.PAIRING_EXPIRED }
-  const given = sha256(parsePairingCode(code))
-  if (given !== p.codeHash) return { error: ERR.PAIRING_INVALID }
-  // single use
-  store.pairing = null
-  const deviceId = randomUUID()
-  const credential = randomToken(CREDENTIAL_BYTES)
-  store.devices.push({
-    id: deviceId,
-    name: String(deviceName || 'phone').slice(0, 60),
-    createdAt: new Date().toISOString(),
-    lastSeen: new Date().toISOString(),
-    credentialHash: sha256(credential),
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    const p = store.pairing
+    if (!p || !p.codeHash) return { error: ERR.PAIRING_USED }
+    if (p.expiresAt < Date.now()) return { error: ERR.PAIRING_EXPIRED }
+    const given = sha256(parsePairingCode(code))
+    if (given !== p.codeHash) return { error: ERR.PAIRING_INVALID }
+    // single use
+    store.pairing = null
+    const deviceId = randomUUID()
+    const credential = randomToken(CREDENTIAL_BYTES)
+    store.devices.push({
+      id: deviceId,
+      name: String(deviceName || 'phone').slice(0, 60),
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      credentialHash: sha256(credential),
+    })
+    await saveStore(file, store)
+    await writePairingTxt(consumedTxt(pairingTxtFile(file), new Date().toISOString()))
+    return { deviceId, credential }
   })
-  await saveStore(file, store)
-  return { deviceId, credential }
 }
 
-/** Verify a device credential; updates lastSeen on success. */
+/** Verify a device credential; updates lastSeen on success (under the lock). */
 export async function verifyDevice(deviceId, credential, file = securityFile()) {
   if (typeof deviceId !== 'string' || typeof credential !== 'string' || !deviceId || !credential) {
     return { error: ERR.AUTH_REQUIRED }
   }
-  const store = await loadStore(file)
-  const dev = store.devices.find((d) => d.id === deviceId)
-  if (!dev) return { error: ERR.AUTH_INVALID }
-  if (sha256(credential) !== dev.credentialHash) return { error: ERR.AUTH_INVALID }
-  dev.lastSeen = new Date().toISOString()
-  await saveStore(file, store)
-  return { ok: true, device: dev }
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    const dev = store.devices.find((d) => d.id === deviceId)
+    if (!dev) return { error: ERR.AUTH_INVALID }
+    if (sha256(credential) !== dev.credentialHash) return { error: ERR.AUTH_INVALID }
+    dev.lastSeen = new Date().toISOString()
+    await saveStore(file, store)
+    return { ok: true, device: dev }
+  })
 }
 
 export async function listDevices(file = securityFile()) {
-  const store = await loadStore(file)
-  return store.devices.map((d) => ({
-    id: d.id, name: d.name, createdAt: d.createdAt, lastSeen: d.lastSeen,
-  }))
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    return store.devices.map((d) => ({
+      id: d.id, name: d.name, createdAt: d.createdAt, lastSeen: d.lastSeen,
+    }))
+  })
 }
 
 export async function revokeDevice(deviceId, file = securityFile()) {
-  const store = await loadStore(file)
-  const before = store.devices.length
-  store.devices = store.devices.filter((d) => d.id !== deviceId)
-  if (store.devices.length === before) return { error: ERR.DEVICE_NOT_FOUND }
-  await saveStore(file, store)
-  return { ok: true }
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    const before = store.devices.length
+    store.devices = store.devices.filter((d) => d.id !== deviceId)
+    if (store.devices.length === before) return { error: ERR.DEVICE_NOT_FOUND }
+    await saveStore(file, store)
+    return { ok: true }
+  })
 }
 
 export async function revokeAllDevices(file = securityFile()) {
-  const store = await loadStore(file)
-  store.devices = []
-  store.pairing = null
-  await saveStore(file, store)
-  return { ok: true }
+  return withStoreLock(file, async () => {
+    const store = await loadStore(file)
+    store.devices = []
+    store.pairing = null
+    await saveStore(file, store)
+    return { ok: true }
+  })
 }

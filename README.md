@@ -53,13 +53,16 @@ authentication. Pairing and the filesystem capability layer are.
 
 ## Features
 
-- **One-click deploy (auto-installs prerequisites)** — `install.ps1` installs
-  missing Node.js / Tailscale (winget), guides the one-time Tailscale sign-in,
-  writes the launcher, enables HTTPS Serve, installs the plugin, registers
-  auto-start on login.
-- **Walk-on-LAN** — a second forwarder binds the PC's LAN IP (detected fresh at
-  each launch, added to `--trusted-host`); on the same Wi-Fi the phone can skip
-  Tailscale entirely: `http://192.168.x.x:3080`. `/remfs` stays device-authenticated.
+- **One-click deploy (auto-installs prerequisites)** — `install.ps1` validates
+  the Node version (^22.19 || >=24), installs missing Node.js / Tailscale
+  (winget), guides the one-time Tailscale sign-in (re-reads the real MagicDNS
+  name — never a fabricated one), writes the launcher, enables HTTPS Serve,
+  installs the plugin, registers auto-start on login.
+- **Walk-on-LAN (opt-in)** — off by default. Create `%USERPROFILE%\.dsh\lan-on`
+  (or set `DSH_REMFS_LAN=1`) to trust the LAN IP and start the LAN forwarder;
+  on the same Wi-Fi the phone can then skip Tailscale (`http://192.168.x.x:3080`).
+  `/remfs` stays device-authenticated. Enabling it widens the network exposure,
+  so it is an explicit choice.
 - **Persistent plugin** — loader entry; host channel registers at startup, the
   client module loads on every page. No re-running after refresh.
 - **Device pairing & management** — one-time pairing code (10 min TTL, single
@@ -108,15 +111,16 @@ dsh plugin --profile web add @zetaluolang/remfs-persistent
 # restart dsh web
 ```
 
-**Windows users (one-click):** double-click **`一键部署.cmd`** — it
-auto-installs Node.js + Tailscale, guides the Tailscale sign-in, writes the
-launcher, enables HTTPS Serve, installs the plugin and prints the phone URLs
-(HTTPS, Tailscale IP, LAN IP).
+**Windows users (one-click):** double-click **`一键部署.cmd`** — it validates
+the Node version (^22.19 || >=24), auto-installs Node.js + Tailscale, guides the
+Tailscale sign-in, writes the launcher, enables HTTPS Serve, installs the plugin
+and prints the phone URLs (HTTPS, Tailscale IP, and the LAN IP when
+walk-on-LAN is enabled).
 
 ### First use on the phone (pairing)
 
-1. Open the phone URL (`https://<pc-name>.<tailnet>.ts.net`, or the LAN URL on
-   the same Wi-Fi).
+1. Open the phone URL (`https://<pc-name>.<tailnet>.ts.net`, or the LAN URL when
+   walk-on-LAN is enabled and you are on the same Wi-Fi).
 2. The workbench shows the **pairing screen**.
 3. On the PC, read the pairing code from
    `%USERPROFILE%\.dsh\remfs-pairing.txt` (or the harness log).

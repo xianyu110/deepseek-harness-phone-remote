@@ -2,6 +2,40 @@
 
 All notable changes to `@zetaluolang/remfs-persistent` and the deploy package.
 
+## [1.1.1] — 2026-08 (bug-fix pass)
+
+### Fixes
+- **Deploy ships the whole `lib/`** — install.ps1 now copies the `lib`
+  directory recursively (security.js/dispatch.js were missing from the old
+  per-file list); added a deployment smoke test.
+- **Revoke protocol** — host reads `targetDeviceId` (the caller's `deviceId` is
+  the auth identity); added an A-revokes-B integration test.
+- **Store concurrency** — all security-store operations are serialized per file
+  and persisted via atomic tmp+rename; concurrent verify/revoke can no longer
+  resurrect a revoked credential; pairing is strictly single-use under the lock.
+- **Pairing lifecycle** — consumed codes are marked `CONSUMED` in
+  `remfs-pairing.txt`; a fresh code is regenerated after use/expiry; distinct
+  `pairing-used` / `pairing-expired` errors.
+- **Allowlist fail-closed** — a corrupt/unreadable `.remfs-roots.json` now
+  denies access instead of silently expanding to the workspace root.
+- **Walk-on-LAN is opt-in** — off by default (`%USERPROFILE%\.dsh\lan-on` or
+  `DSH_REMFS_LAN=1`); docs updated.
+- **Launcher process ownership** — "3080 listening" is no longer treated as
+  "our harness running": every check/kill matches the owning process's command
+  line (`harness-common.ps1`); foreign 3080 services are never exposed or
+  killed; added a dummy-:3080 regression test.
+- **DNSName honesty** — install.ps1 re-reads `tailscale status --json` after
+  sign-in and never fabricates `COMPUTERNAME.tailnet.ts.net` as a trusted host.
+- **Node version validated** — the installer checks `node --version` against
+  `^22.19.0 || >=24.0.0` (upstream requirement), not just the executable's
+  existence.
+- **Breadcrumb closure** — each crumb captures its own prefix path.
+
+### Tests
+- `test/dispatch.test.js` (protocol/integration, temp-dir fs adapter),
+  `test/install-smoke.ps1` (deployment), `test/launcher-ownership.ps1`
+  (dummy :3080). CI now runs a Windows job for the PowerShell tests.
+
 ## [1.1.0] — 2026-08 (security release)
 
 ### Security

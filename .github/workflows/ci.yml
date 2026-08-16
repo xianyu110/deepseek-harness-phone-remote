@@ -25,12 +25,28 @@ jobs:
       - name: PowerShell syntax check (Windows scripts, via pwsh)
         shell: pwsh
         run: |
-          $files = @('install.ps1', 'keep_awake.ps1', 'restart_harness.ps1', 'stop_harness.ps1', 'start_harness.template.ps1')
+          $files = @('install.ps1', 'keep_awake.ps1', 'restart_harness.ps1', 'stop_harness.ps1', 'start_harness.template.ps1', 'harness-common.ps1', 'test/install-smoke.ps1', 'test/launcher-ownership.ps1')
           foreach ($f in $files) {
             $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errs) | Out-Null
             if ($errs.Count -gt 0) { Write-Error "$f parse errors: $($errs.Count)"; exit 1 }
           }
+
+  windows-deploy-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Deployment smoke test
+        shell: pwsh
+        run: ./test/install-smoke.ps1
+      - name: Launcher ownership regression (dummy :3080)
+        shell: pwsh
+        run: ./test/launcher-ownership.ps1
+      - name: Node tests on Windows
+        run: cd remfs-persistent && node --test test/security.test.js test/dispatch.test.js
 
   package-smoke:
     runs-on: ubuntu-latest

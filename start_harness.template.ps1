@@ -14,9 +14,22 @@ $node = "C:\Program Files\nodejs\node.exe"
 $dshBin = "__DSHBIN__"
 $logDir = Join-Path $env:USERPROFILE ".dsh\launcher"
 
-function Test-HarnessListening {
-    $conn = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-    return ($null -ne $conn)
+# Process-ownership helpers: "port listening" alone is never treated as "our
+# harness running"; the owning process command line must match $dshBin.
+$common = Join-Path $PSScriptRoot "harness-common.ps1"
+if (Test-Path $common) { . $common } else {
+    Write-Host "[!] harness-common.ps1 missing - ownership checks disabled" -ForegroundColor Yellow
+}
+
+function Test-HarnessRunning {
+    $pid_ = $null
+    if (Get-Command Get-OwnedHarnessPid -ErrorAction SilentlyContinue) {
+        $pid_ = Get-OwnedHarnessPid -Port 3080 -Marker $dshBin
+    } else {
+        $conn = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
+        if ($conn) { $pid_ = $conn.OwningProcess | Select-Object -First 1 }
+    }
+    return ($null -ne $pid_)
 }
 
 # Phone access through Tailscale: the GUI binds 127.0.0.1 only, so forward the
@@ -25,15 +38,26 @@ function Test-HarnessListening {
 $tailscaleIP = "__TSIP__"
 $forwardBin = Join-Path $PSScriptRoot "tailscale_forward.js"
 
-function Test-ForwardListening {
-    $conn = Get-NetTCPConnection -LocalAddress $tailscaleIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-    return ($null -ne $conn)
+function Test-ForwardRunning {
+    $pid_ = $null
+    if (Get-Command Get-OwnedForwarderPid -ErrorAction SilentlyContinue) {
+        $pid_ = Get-OwnedForwarderPid -ListenIP $tailscaleIP -Port 3080
+    } else {
+        $conn = Get-NetTCPConnection -LocalAddress $tailscaleIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
+        if ($conn) { $pid_ = $conn.OwningProcess | Select-Object -First 1 }
+    }
+    return ($null -ne $pid_)
 }
 
-# Walk-on-LAN: when the phone is on the same Wi-Fi it can bypass Tailscale and
-# connect straight to the PC's LAN IP. Detected fresh on every launch because
-# DHCP addresses change. Excludes loopback, APIPA, and the Tailscale CGNAT range.
-function Get-LanIPv4 {
+# Walk-on-LAN is OPT-IN by default. Create %USERPROFILE%\.dsh\lan-on (or set
+# the DSH_REMFS_LAN=1 environment variable) to trust the LAN IP and start the
+# LAN forwarder. Same-Wi-Fi direct access widens the network exposure, so it
+# must be an explicit choice.
+$lanOn = (Test-Path (Join-Path $env:USERPROFILE ".dsh\lan-on")) -or ($env:DSH_REMFS_LAN -eq "1")
+$lanIP = ""
+if ($lanOn) {
+    # Excludes loopback, APIPA and the Tailscale CGNAT range. Detected fresh on
+    # every launch because DHCP addresses change.
     $cands = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
         $_.IPAddress -ne "127.0.0.1" -and
         $_.IPAddress -notlike "169.254.*" -and
@@ -42,11 +66,9 @@ function Get-LanIPv4 {
     }
     foreach ($c in ($cands | Sort-Object InterfaceMetric)) {
         $iface = Get-NetAdapter -InterfaceIndex $c.InterfaceIndex -ErrorAction SilentlyContinue
-        if ($iface -and $iface.Status -eq "Up") { return $c.IPAddress }
+        if ($iface -and $iface.Status -eq "Up") { $lanIP = $c.IPAddress; break }
     }
-    return ""
 }
-$lanIP = Get-LanIPv4
 
 if (-not (Test-Path $node)) {
     Add-Type -AssemblyName System.Windows.Forms
@@ -62,16 +84,18 @@ if (-not (Test-Path $dshBin)) {
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
-# Start the harness only when it is not already running.
+# Start the harness only when OUR harness is not already running (a foreign
+# process occupying 3080 must not be mistaken for ours and must never be
+# exposed to the network).
 $ready = $true
-if (-not (Test-HarnessListening)) {
+if (-not (Test-HarnessRunning)) {
     $outLog = Join-Path $logDir "harness_$stamp.out.log"
     $errLog = Join-Path $logDir "harness_$stamp.err.log"
 
     # Remote access: phone reaches this GUI through the PC's Tailscale IP
     # (plain HTTP via the TCP forwarder), the tailnet HTTPS name (via tailscale
-    # serve), and the LAN IP (walk-on-LAN, same Wi-Fi). All must pass the /api
-    # browser-trust fence.
+    # serve), and optionally the LAN IP (walk-on-LAN, opt-in). All must pass
+    # the /api browser-trust fence.
     $trusted = @("--port", "3080", "--trusted-host", "__TSIP__", "--trusted-host", "__TSNAME__")
     if ($lanIP) { $trusted += @("--trusted-host", $lanIP) }
     $proc = Start-Process -FilePath $node `
@@ -82,18 +106,18 @@ if (-not (Test-HarnessListening)) {
         -RedirectStandardError $errLog `
         -PassThru
 
-    # Wait up to 30s for the port to come up.
+    # Wait up to 30s for OUR harness to come up.
     $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 500
-        if (Test-HarnessListening) { $ready = $true; break }
+        if (Test-HarnessRunning) { $ready = $true; break }
         if ($proc.HasExited) { break }
     }
 }
 
-# Ensure the Tailscale forwarder whenever the harness is up. Re-check the port
+# Ensure the Tailscale forwarder whenever our harness is up. Re-check the port
 # here (not the $ready flag) so a slow harness boot still gets its forwarders.
-if ((Test-HarnessListening) -and (Test-Path $forwardBin) -and -not (Test-ForwardListening)) {
+if ((Test-HarnessRunning) -and (Test-Path $forwardBin) -and -not (Test-ForwardRunning)) {
     $fOut = Join-Path $logDir "forward_$stamp.out.log"
     $fErr = Join-Path $logDir "forward_$stamp.err.log"
     Start-Process -FilePath $node `
@@ -105,8 +129,8 @@ if ((Test-HarnessListening) -and (Test-Path $forwardBin) -and -not (Test-Forward
     Start-Sleep -Seconds 1
 }
 
-# Walk-on-LAN forwarder: same-Wi-Fi access without Tailscale.
-if ((Test-HarnessListening) -and $lanIP -and (Test-Path $forwardBin)) {
+# Walk-on-LAN forwarder: only when explicitly enabled.
+if ($lanIP -and (Test-HarnessRunning) -and (Test-Path $forwardBin)) {
     $lanListening = Get-NetTCPConnection -LocalAddress $lanIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
     if (-not $lanListening) {
         $fOut = Join-Path $logDir "forward_lan_$stamp.out.log"

@@ -480,8 +480,9 @@ window.__ModuleLoader__.load({
       let acc = ''
       const crumbs = segs.map((seg, i) => {
         acc = i === 0 ? seg : acc + '\\' + seg
+        const crumbPath = acc // capture THIS crumb's own prefix (closure bug fix)
         const last = i === segs.length - 1
-        return React.createElement('button', { key: i, className: 'remfs-chip' + (last ? ' cur' : ''), onClick: () => { if (!last) load(acc) } }, seg)
+        return React.createElement('button', { key: i, className: 'remfs-chip' + (last ? ' cur' : ''), onClick: () => { if (!last) load(crumbPath) } }, seg)
       })
 
       const navBar = React.createElement(React.Fragment, null,

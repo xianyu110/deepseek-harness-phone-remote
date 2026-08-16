@@ -1,6 +1,8 @@
 # One-shot restart for the DeepSeek Harness Web GUI.
-# Kills the process listening on port 3080, then relaunches via start_harness.ps1
-# so the new --trusted-host flag takes effect.
+# Kills ONLY processes this project owns (the dsh web process matching the
+# launcher's dshBin, plus our Tailscale forwarder), then relaunches via
+# start_harness.ps1. A foreign process listening on 3080 is never killed and
+# never exposed to the network.
 #
 # All ASCII on purpose: Windows PowerShell 5.1 mis-decodes UTF-8 no-BOM scripts.
 
@@ -13,20 +15,35 @@ $delay = 20
 if ($args.Count -gt 0 -and $args[0] -match '^\d+$') { $delay = [int]$args[0] }
 if ($delay -gt 0) { Start-Sleep -Seconds $delay }
 
-# Kill every process listening on the harness port: dsh web on 127.0.0.1 and
-# the Tailscale forwarder on the Tailscale IP. Killing only the first match
-# could leave the other one half-alive.
-$conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-$pidsToKill = $conns | Select-Object -ExpandProperty OwningProcess -Unique
-foreach ($p in $pidsToKill) {
-    Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+$common = Join-Path $scriptDir "harness-common.ps1"
+if (Test-Path $common) { . $common }
+
+# Our harness marker comes from the generated launcher's $dshBin line.
+$startScript = Join-Path $scriptDir "start_harness.ps1"
+$marker = ""
+if (Test-Path $startScript) {
+    $line = Get-Content $startScript | Where-Object { $_ -match '^\$dshBin\s*=\s*"' } | Select-Object -First 1
+    if ($line -and $line -match '"([^"]+)"') { $marker = $Matches[1] }
 }
-    # Wait for the port to free up.
-    for ($i = 0; $i -lt 20; $i++) {
-        Start-Sleep -Milliseconds 500
-        $still = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-        if (-not $still) { break }
+
+if ($marker -and (Get-Command Stop-OwnedHarnessStack -ErrorAction SilentlyContinue)) {
+    Stop-OwnedHarnessStack -Marker $marker -ForwarderIPs @() -Port $port
+} elseif ($marker) {
+    $conn = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    if ($conn) {
+        foreach ($p in ($conn.OwningProcess | Sort-Object -Unique)) {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue
+            if ($proc -and $proc.CommandLine -and $proc.CommandLine.Contains($marker)) {
+                Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+            }
+        }
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Milliseconds 500
+            $still = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            if (-not $still) { break }
+        }
     }
+}
 
 # Relaunch (starts the harness hidden and waits for the port, then opens the browser).
 & (Join-Path $scriptDir "start_harness.ps1")

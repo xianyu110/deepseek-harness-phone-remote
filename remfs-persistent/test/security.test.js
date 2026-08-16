@@ -8,7 +8,7 @@ import path from 'node:path'
 import {
   normPath, hasTraversal, isWithin, segmentsDenied, deniedPath, canSetRoots,
   ensurePairingCode, pairDevice, verifyDevice, listDevices, revokeDevice,
-  revokeAllDevices, parsePairingCode, formatPairingCode, securityFile,
+  revokeAllDevices, parsePairingCode, formatPairingCode, securityFile, buildCrumbs,
 } from '../lib/security.js'
 
 const DOCS = path.join(os.homedir(), 'Documents')
@@ -95,7 +95,7 @@ test('pairing code: single use, valid once', async () => {
     assert.ok(a.deviceId && a.credential)
     // reuse must fail (single use)
     const b = await pairDevice(code, 'second', f)
-    assert.equal(b.error, 'pairing-invalid')
+    assert.equal(b.error, 'pairing-used')
   } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
 })
 
@@ -169,4 +169,47 @@ async function freshCode(f) {
 test('default store location is under the DSH home', () => {
   assert.ok(securityFile().startsWith(path.join(os.homedir(), '.dsh')))
   assert.ok(!securityFile().includes('Documents'))
+})
+
+test('buildCrumbs: each crumb captures its own prefix (no shared accumulator)', () => {
+  const crumbs = buildCrumbs('C:\\Users\\zeta\\Documents\\proj')
+  assert.deepEqual(crumbs.map((c) => c.path), [
+    'C:',
+    'C:\\Users',
+    'C:\\Users\\zeta',
+    'C:\\Users\\zeta\\Documents',
+    'C:\\Users\\zeta\\Documents\\proj',
+  ])
+  assert.deepEqual(crumbs.map((c) => c.last), [false, false, false, false, true])
+  assert.deepEqual(buildCrumbs(''), [])
+})
+
+test('pairing txt: consumed code is marked so it cannot mislead', async () => {
+  const f = await tempFile()
+  try {
+    const code = await ensurePairingCode(f)
+    await pairDevice(code, 'phone', f)
+    const txt = path.join(path.dirname(f), 'remfs-pairing.txt')
+    const body = await (await import('node:fs/promises')).readFile(txt, 'utf8')
+    assert.ok(/CONSUMED/.test(body))
+    // regeneration after consumption returns a fresh plaintext code
+    const code2 = await ensurePairingCode(f)
+    assert.ok(code2 && code2 !== code)
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+test('concurrent verify/revoke: revoked credential never resurrects', async () => {
+  const f = await tempFile()
+  try {
+    const code = await ensurePairingCode(f)
+    const { deviceId, credential } = await pairDevice(code, 'phone', f)
+    await Promise.all([
+      verifyDevice(deviceId, credential, f),
+      verifyDevice(deviceId, credential, f),
+      revokeDevice(deviceId, f),
+      verifyDevice(deviceId, credential, f),
+    ])
+    const after = await verifyDevice(deviceId, credential, f)
+    assert.equal(after.error, 'auth-invalid')
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
 })
