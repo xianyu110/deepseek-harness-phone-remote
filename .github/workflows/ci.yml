@@ -110,7 +110,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/setup-powershell@v1
       - name: Install current @deepseek-ai/dsh
         run: npm i -g @deepseek-ai/dsh
       - name: Installer-patch integration (fresh + old-row migration + real-DSH boot)

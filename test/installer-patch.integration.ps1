@@ -98,6 +98,7 @@ try {
 
     # ---- real-DSH boot (only when a dsh binary is available) ----
     $dshBin = $env:DSH_BIN
+    if ($dshBin -and -not (Test-Path $dshBin)) { $dshBin = "" }
     if (-not $dshBin) {
         $cmd = Get-Command dsh -ErrorAction SilentlyContinue
         if ($cmd) { $dshBin = $cmd.Source }
