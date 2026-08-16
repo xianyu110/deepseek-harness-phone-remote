@@ -80,6 +80,13 @@ authentication. Pairing and the filesystem capability layer are.
   *who* you are. Device pairing is the application boundary.
 - **trusted-host ≠ authentication.** It is the browser-trust fence (Host header +
   cross-site checks). Pairing is the boundary.
+- **The Harness process stays loopback-only.** Exposing the web service on a
+  network interface happens ONLY through the explicit forwarders (the Tailscale
+  IP, and the LAN IP when walk-on-LAN is opted in) — those bind specific
+  addresses, never 0.0.0.0.
+- **Pairing protects `/remfs` only, not the native Harness `/api`.** The GUI's
+  own API surface has no user login; keep the network boundary (tailnet / LAN)
+  tight and review which devices can reach it.
 - **The filesystem allowlist is the primary file-permission boundary.** Remote
   clients can only *narrow* it; widening (`C:\`, new drives) requires editing
   `.remfs-roots.json` on the PC.

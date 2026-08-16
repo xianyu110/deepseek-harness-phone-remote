@@ -1,4 +1,4 @@
-# CI: lint (syntax), unit/security tests, and package install smoke test.
+# CI: lint (syntax), unit/security tests, deploy/ownership tests, packaging.
 # Kept deliberately light — no heavyweight framework, just node:test + node --check.
 name: CI
 
@@ -15,17 +15,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Syntax check (lint)
+      - name: Syntax check every lib file (lint)
         run: |
-          node --check remfs-persistent/lib/host.js
-          node --check remfs-persistent/lib/client.js
-          node --check remfs-persistent/lib/security.js
-      - name: Security + filesystem tests
-        run: node --test remfs-persistent/test/security.test.js
-      - name: PowerShell syntax check (Windows scripts, via pwsh)
+          for f in host.js client.js security.js dispatch.js; do
+            node --check "remfs-persistent/lib/$f"
+          done
+      - name: All node tests (security, dispatch, client contract)
+        run: node --test "remfs-persistent/test/*.test.js"
+      - name: No maintainer-specific paths in deploy scripts
         shell: pwsh
         run: |
-          $files = @('install.ps1', 'keep_awake.ps1', 'restart_harness.ps1', 'stop_harness.ps1', 'start_harness.template.ps1', 'harness-common.ps1', 'test/install-smoke.ps1', 'test/launcher-ownership.ps1')
+          $files = @('install.ps1', 'keep_awake.ps1', 'restart_harness.ps1', 'stop_harness.ps1', 'start_harness.template.ps1', 'harness-common.ps1', 'refresh_pairing.ps1')
+          $bad = @()
+          foreach ($f in $files) {
+            $hits = Select-String -Path $f -Pattern 'C:\\Users\\[A-Za-z]' -ErrorAction SilentlyContinue
+            if ($hits) { $bad += "$f : " + (($hits | ForEach-Object { $_.LineNumber }) -join ',') }
+          }
+          if ($bad.Count -gt 0) { Write-Error "Maintainer-specific C:\Users\<name> paths found: $($bad -join '; ')"; exit 1 }
+      - name: PowerShell syntax check (deploy scripts)
+        shell: pwsh
+        run: |
+          $files = @('install.ps1', 'keep_awake.ps1', 'restart_harness.ps1', 'stop_harness.ps1', 'start_harness.template.ps1', 'harness-common.ps1', 'refresh_pairing.ps1', 'test/install-smoke.ps1', 'test/launcher-ownership.ps1')
           foreach ($f in $files) {
             $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errs) | Out-Null
@@ -42,11 +52,11 @@ jobs:
       - name: Deployment smoke test
         shell: pwsh
         run: ./test/install-smoke.ps1
-      - name: Launcher ownership regression (dummy :3080)
+      - name: Launcher ownership regression (dummy :3080 + owned-kill)
         shell: pwsh
         run: ./test/launcher-ownership.ps1
-      - name: Node tests on Windows
-        run: cd remfs-persistent && node --test test/security.test.js test/dispatch.test.js
+      - name: All node tests on Windows
+        run: cd remfs-persistent && node --test "test/*.test.js"
 
   package-smoke:
     runs-on: ubuntu-latest
@@ -65,6 +75,6 @@ jobs:
           TARBALL=$(ls *.tgz | head -1)
           mkdir -p /tmp/scratch && cd /tmp/scratch
           npm init -y >/dev/null 2>&1
-          npm install "/github/workspace/remfs-persistent/$TARBALL" >/dev/null 2>&1 || npm install "$OLDPWD/$TARBALL" >/dev/null 2>&1
+          npm install "$OLDPWD/$TARBALL" >/dev/null 2>&1 || npm install "$PWD/../../$TARBALL" >/dev/null 2>&1
           ls node_modules/@zetaluolang/remfs-persistent/lib/
           node -e "const s = require('./node_modules/@zetaluolang/remfs-persistent/lib/security.js'); console.log('security module ok, exports:', Object.keys(s).length)"

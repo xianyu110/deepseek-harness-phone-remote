@@ -16,20 +16,18 @@ $logDir = Join-Path $env:USERPROFILE ".dsh\launcher"
 
 # Process-ownership helpers: "port listening" alone is never treated as "our
 # harness running"; the owning process command line must match $dshBin.
+# Missing/broken helpers are FATAL - we never fall back to trusting any
+# localhost listener, and never start a forwarder without them.
 $common = Join-Path $PSScriptRoot "harness-common.ps1"
-if (Test-Path $common) { . $common } else {
-    Write-Host "[!] harness-common.ps1 missing - ownership checks disabled" -ForegroundColor Yellow
+if (-not (Test-Path $common) -or -not (Get-Command Get-OwnedHarnessPid -ErrorAction SilentlyContinue)) {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show("harness-common.ps1 is missing or broken. Re-run install.ps1.", "DeepSeek Harness")
+    exit 1
 }
+. $common
 
 function Test-HarnessRunning {
-    $pid_ = $null
-    if (Get-Command Get-OwnedHarnessPid -ErrorAction SilentlyContinue) {
-        $pid_ = Get-OwnedHarnessPid -Port 3080 -Marker $dshBin
-    } else {
-        $conn = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-        if ($conn) { $pid_ = $conn.OwningProcess | Select-Object -First 1 }
-    }
-    return ($null -ne $pid_)
+    return ($null -ne (Get-OwnedHarnessPid -Port 3080 -Marker $dshBin))
 }
 
 # Phone access through Tailscale: the GUI binds 127.0.0.1 only, so forward the
@@ -39,14 +37,7 @@ $tailscaleIP = "__TSIP__"
 $forwardBin = Join-Path $PSScriptRoot "tailscale_forward.js"
 
 function Test-ForwardRunning {
-    $pid_ = $null
-    if (Get-Command Get-OwnedForwarderPid -ErrorAction SilentlyContinue) {
-        $pid_ = Get-OwnedForwarderPid -ListenIP $tailscaleIP -Port 3080
-    } else {
-        $conn = Get-NetTCPConnection -LocalAddress $tailscaleIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-        if ($conn) { $pid_ = $conn.OwningProcess | Select-Object -First 1 }
-    }
-    return ($null -ne $pid_)
+    return ($null -ne (Get-OwnedForwarderPid -ListenIP $tailscaleIP -Port 3080))
 }
 
 # Walk-on-LAN is OPT-IN by default. Create %USERPROFILE%\.dsh\lan-on (or set
@@ -92,8 +83,8 @@ if (-not (Test-HarnessRunning)) {
     # Self-heal: with the harness down, its file locks are released, so sync
     # the plugin from vendor into node_modules. Abort rather than launch a
     # harness with a broken plugin import.
-    $remfsVendor = "C:\Users\zeta\.dsh\profiles\web\vendor\remfs-persistent"
-    $remfsNmPkg = "C:\Users\zeta\.dsh\profiles\web\node_modules\@zetaluolang\remfs-persistent"
+    $remfsVendor = Join-Path $env:USERPROFILE ".dsh\profiles\web\vendor\remfs-persistent"
+    $remfsNmPkg = Join-Path $env:USERPROFILE ".dsh\profiles\web\node_modules\@zetaluolang\remfs-persistent"
     if ((Get-Command Sync-RemfsPlugin -ErrorAction SilentlyContinue) -and -not (Sync-RemfsPlugin -Vendor $remfsVendor -NmPkg $remfsNmPkg)) {
         Add-Type -AssemblyName System.Windows.Forms
         [System.Windows.Forms.MessageBox]::Show("remfs plugin sync failed. Re-run install.ps1.", "DeepSeek Harness")

@@ -1,7 +1,11 @@
 # Launcher process-ownership regression test (bug-fix pass).
-# A FOREIGN process listening on 127.0.0.1:3080 must NOT be reported as our
-# harness, must NOT match an empty marker, and must never be killed. Windows
-# PowerShell 5.1 compatible.
+# 1) A FOREIGN process listening on a port must NOT be reported as our harness,
+#    must NOT match an empty marker, and must never be killed.
+# 2) Stop-OwnedHarnessStack kills ONLY a process whose command line matches the
+#    marker (owned), leaving foreign listeners alive.
+# 3) restart_harness.ps1 derives the owned forwarder IP (never an empty list).
+# Windows PowerShell 5.1 compatible. Dummy servers run from temp .js files so
+# Start-Process argument quoting cannot break them.
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root "harness-common.ps1")
@@ -11,32 +15,68 @@ if (-not (Get-Command Get-OwnedHarnessPid -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-# Dummy listener on a spare port (the real harness may occupy 3080).
-$port = 3123
-$dummy = Start-Process -FilePath "node" `
-    -ArgumentList @("-e", "require('http').createServer(function(){ }).listen($port,'127.0.0.1'); setInterval(function(){},1000);") `
-    -WindowStyle Hidden -PassThru
-Start-Sleep -Seconds 2
+function New-DummyServer([int]$Port, [string]$Marker) {
+    $dir = Join-Path $env:TEMP ("remfs-dummy-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $code = "require('http').createServer(function(){ }).listen($Port,'127.0.0.1'); setInterval(function(){},1000);"
+    $file = Join-Path $dir "server.js"
+    [System.IO.File]::WriteAllText($file, $code)
+    # The marker must appear in the PROCESS COMMAND LINE (ownership is verified
+    # by command line, not file contents), so pass it as a node argument.
+    $argsList = @($file)
+    if ($Marker) { $argsList += $Marker }
+    $p = Start-Process -FilePath "node" -ArgumentList $argsList -WindowStyle Hidden -PassThru
+    Start-Sleep -Seconds 2
+    return @{ Proc = $p; Dir = $dir }
+}
+
+$foreign = $null
+$owned = $null
 try {
-    # 1) a foreign listener must never be reported as ours (marker mismatch)
-    $pidOurs = Get-OwnedHarnessPid -Port $port -Marker "C:\Fake\Not\Our\Path\bin.js"
-    if ($null -ne $pidOurs) {
-        Write-Error "foreign :$port listener reported as our harness"
+    # --- 1) foreign listener on port A is never ours, never killed ---
+    $portA = 3124
+    $foreign = New-DummyServer -Port $portA
+    $pidOurs = Get-OwnedHarnessPid -Port $portA -Marker "C:\Fake\Not\Our\Path\bin.js"
+    if ($null -ne $pidOurs) { Write-Error "foreign :$portA listener reported as our harness"; exit 1 }
+    $pidEmpty = Get-OwnedHarnessPid -Port $portA -Marker ""
+    if ($null -ne $pidEmpty) { Write-Error "empty marker matched a listener"; exit 1 }
+    if (-not (Get-Process -Id $foreign.Proc.Id -ErrorAction SilentlyContinue)) {
+        Write-Error "foreign :$portA process died unexpectedly"
         exit 1
     }
-    # 2) an empty marker must never match anything
-    $pidEmpty = Get-OwnedHarnessPid -Port $port -Marker ""
-    if ($null -ne $pidEmpty) {
-        Write-Error "empty marker matched a listener"
+
+    # --- 2) owned listener (marker in cmdline) is killed; foreign survives ---
+    $marker = "remfs-ownership-test-marker"
+    $portB = 3125
+    $owned = New-DummyServer -Port $portB -Marker $marker
+    $pidOwned = Get-OwnedHarnessPid -Port $portB -Marker $marker
+    if ($null -eq $pidOwned -or $pidOwned -ne $owned.Proc.Id) {
+        Write-Error "owned listener not identified (got '$pidOwned', expected $($owned.Proc.Id))"
         exit 1
     }
-    # 3) the foreign process must still be alive (we never killed it)
-    $alive = Get-Process -Id $dummy.Id -ErrorAction SilentlyContinue
-    if (-not $alive) {
-        Write-Error "foreign :3080 process was killed by ownership logic!"
+    Stop-OwnedHarnessStack -Marker $marker -ForwarderIPs @() -Port $portB
+    if (Get-Process -Id $owned.Proc.Id -ErrorAction SilentlyContinue) {
+        Write-Error "owned listener survived Stop-OwnedHarnessStack"
         exit 1
     }
-    Write-Host "launcher ownership: OK (foreign :3080 not trusted, not killed)"
+    if (-not (Get-Process -Id $foreign.Proc.Id -ErrorAction SilentlyContinue)) {
+        Write-Error "FOREIGN listener was killed by Stop-OwnedHarnessStack!"
+        exit 1
+    }
+
+    # --- 3) restart_harness.ps1 derives the owned forwarder IP ---
+    $restartSrc = Get-Content (Join-Path $root "restart_harness.ps1") -Raw
+    if ($restartSrc -notmatch '\$forwardIPs\s*\+=\s*\$Matches\[1\]' -or $restartSrc -notmatch '\$tailscaleIP') {
+        Write-Error "restart_harness.ps1 must derive the forwarder IP from the launcher"
+        exit 1
+    }
+    if ($restartSrc -match 'ForwarderIPs\s+@\(\)') {
+        Write-Error "restart_harness.ps1 must not pass an empty ForwarderIPs list"
+        exit 1
+    }
+
+    Write-Host "launcher ownership: OK (foreign not trusted/killed, owned killed, forwarder IP derived)"
 } finally {
-    Stop-Process -Id $dummy.Id -Force -ErrorAction SilentlyContinue
+    if ($foreign) { Stop-Process -Id $foreign.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $foreign.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($owned) { Stop-Process -Id $owned.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $owned.Dir -Recurse -Force -ErrorAction SilentlyContinue }
 }

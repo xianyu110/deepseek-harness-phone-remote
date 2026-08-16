@@ -18,16 +18,20 @@ if ($delay -gt 0) { Start-Sleep -Seconds $delay }
 $common = Join-Path $scriptDir "harness-common.ps1"
 if (Test-Path $common) { . $common }
 
-# Our harness marker comes from the generated launcher's $dshBin line.
+# Our harness marker comes from the generated launcher's $dshBin line; the
+# owned forwarder address from its $tailscaleIP line.
 $startScript = Join-Path $scriptDir "start_harness.ps1"
 $marker = ""
+$forwardIPs = @()
 if (Test-Path $startScript) {
-    $line = Get-Content $startScript | Where-Object { $_ -match '^\$dshBin\s*=\s*"' } | Select-Object -First 1
-    if ($line -and $line -match '"([^"]+)"') { $marker = $Matches[1] }
+    $dshLine = Get-Content $startScript | Where-Object { $_ -match '^\$dshBin\s*=\s*"' } | Select-Object -First 1
+    if ($dshLine -and $dshLine -match '"([^"]+)"') { $marker = $Matches[1] }
+    $tsLine = Get-Content $startScript | Where-Object { $_ -match '^\$tailscaleIP\s*=\s*"' } | Select-Object -First 1
+    if ($tsLine -and $tsLine -match '"([^"]+)"') { $forwardIPs += $Matches[1] }
 }
 
 if ($marker -and (Get-Command Stop-OwnedHarnessStack -ErrorAction SilentlyContinue)) {
-    Stop-OwnedHarnessStack -Marker $marker -ForwarderIPs @() -Port $port
+    Stop-OwnedHarnessStack -Marker $marker -ForwarderIPs $forwardIPs -Port $port
 } elseif ($marker) {
     $conn = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     if ($conn) {

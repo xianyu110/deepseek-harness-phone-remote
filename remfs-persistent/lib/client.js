@@ -310,7 +310,9 @@ window.__ModuleLoader__.load({
       }
 
       const doRevoke = (id) => {
-        rpc('revoke', { id }).then((r) => {
+        // Protocol: the revoke target is a SEPARATE field from the caller's
+        // auth identity (deviceId/credential are attached by rpc()).
+        rpc('revoke', { targetDeviceId: id }).then((r) => {
           if (r && r.ok) { showToast(t('revokedToast'), 'success'); loadDevices() }
           else if (noteAuth(r)) { /* pairing UI */ }
         }).catch(() => {})

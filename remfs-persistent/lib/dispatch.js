@@ -91,6 +91,9 @@ export function createDispatcher(adapter, opts = {}) {
 
   const auth = async (payload) => {
     const res = await verifyDevice(payload && payload.deviceId, payload && payload.credential, secFile)
+    if (res.error === ERR.STORE_CORRUPT) {
+      return err(ERR.STORE_CORRUPT, 'security store corrupt — see ~/.dsh/remfs-security.json.corrupt-*; re-pair devices after fixing it')
+    }
     if (res.error === ERR.AUTH_REQUIRED) return err(ERR.AUTH_REQUIRED, 'device authentication required')
     if (res.error) return err(ERR.AUTH_INVALID, 'device authentication failed — re-pair the device')
     return null
@@ -111,6 +114,9 @@ export function createDispatcher(adapter, opts = {}) {
         const name = payload && payload.deviceName
         if (!code || typeof code !== 'string') return err(ERR.PAIRING_INVALID, 'pairing code required')
         const res = await pairDevice(code, name, secFile)
+        if (res.error === ERR.STORE_CORRUPT) {
+          return err(ERR.STORE_CORRUPT, 'security store corrupt — see ~/.dsh/remfs-security.json.corrupt-*')
+        }
         if (res.error === ERR.PAIRING_EXPIRED) {
           return err(ERR.PAIRING_EXPIRED, 'pairing code expired — run refresh_pairing.ps1 (or restart the harness) for a new code')
         }

@@ -51,6 +51,8 @@ flowchart LR
 
 - **Tailscale ≠ 认证**:它只证明"在哪个网络",不证明"你是谁"。配对才是应用边界。
 - **trusted-host ≠ 认证**:它只是浏览器信任围栏(Host 头 + 跨站检查)。配对才是边界。
+- **Harness 进程始终只绑 loopback**:把 Web 服务暴露到网络接口的唯一途径是显式转发器(Tailscale IP,以及开启 walk-on-LAN 时的局域网 IP)——只绑具体地址,绝不绑 0.0.0.0。
+- **配对只保护 `/remfs`,不保护原生 Harness `/api`**:GUI 自身 API 没有用户登录;请收紧网络边界(tailnet / 局域网)并定期检查可达设备。
 - **文件白名单是主要文件权限边界**:远程客户端只能*收窄*白名单;扩大(`C:\`、新盘符)必须在本机编辑 `.remfs-roots.json`。
 - **路径逃逸双重防御**:带 `..`/UNC 的原始路径直接拒绝;规范后的 realpath 必须落在白名单内(符号链接/junction 逃逸失败)。
 - 完整威胁模型见 [SECURITY.md](SECURITY.md)。

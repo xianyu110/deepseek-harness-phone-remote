@@ -2,6 +2,30 @@
 
 All notable changes to `@zetaluolang/remfs-persistent` and the deploy package.
 
+## [1.1.2] — 2026-08 (regression-fix pass, CI green)
+
+- **Revoke protocol** — client now sends `targetDeviceId`; added a true
+  client-source → RPC payload → dispatcher contract test.
+- **No maintainer paths** — launcher/template derive profile paths from
+  `$env:USERPROFILE`; CI scans for `C:\Users\<name>` literals.
+- **stop_harness** — ownership-verified (harness-common); a foreign :3080
+  listener survives.
+- **start_harness** — missing/broken `harness-common.ps1` is fatal (no
+  fail-open fallback, no forwarder without ownership checks).
+- **restart_harness** — derives the owned forwarder IP from the launcher
+  (was an empty list); restart-kill regression test added.
+- **CI** — `node --check` on every lib file (incl. dispatch.js), all
+  `*.test.js` run via glob (directory form was broken), path-scan step.
+- **Store corruption** — `loadStore` distinguishes ENOENT (fresh) from
+  corruption/permission errors; corrupt stores are backed up
+  (`<file>.corrupt-<ts>`), kept in place, and fail closed with
+  `store-corrupt` instead of silently resetting device/pairing state.
+- **refresh_pairing.ps1** — implemented and deployed (pairing code rotation
+  without a harness restart); instruction in dispatch errors is now real.
+- **Docs** — README/SECURITY clarify: Harness stays loopback-only (LAN
+  exposure only via opt-in forwarders); pairing protects `/remfs`, not the
+  native `/api`.
+
 ## [1.1.1] — 2026-08 (bug-fix pass)
 
 ### Fixes

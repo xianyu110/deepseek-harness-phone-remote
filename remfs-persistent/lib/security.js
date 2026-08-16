@@ -15,7 +15,7 @@
 // verifyDevice/revokeDevice/pairDevice calls cannot resurrect a revoked
 // credential or double-consume a pairing code.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename, access } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, copyFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
@@ -39,6 +39,7 @@ export const DENY_FILE = /(^|[/\\])\.ssh([/\\]|$)|(^|[/\\])\.git([/\\]|$)|(^|[/\
 export const ERR = {
   AUTH_REQUIRED: 'auth-required',
   AUTH_INVALID: 'auth-invalid',
+  STORE_CORRUPT: 'store-corrupt',
   PAIRING_INVALID: 'pairing-invalid',
   PAIRING_EXPIRED: 'pairing-expired',
   PAIRING_USED: 'pairing-used',
@@ -159,18 +160,62 @@ export const pairingTxtFile = (file = securityFile()) =>
 
 // ------------------------------------------------------------------ store
 
+/**
+ * Load the security store. FAILS CLOSED:
+ *  - ENOENT (no store yet)            -> fresh { devices: [], pairing: null }
+ *  - any other read/parse/permission  -> backs the bad file up to
+ *    `<file>.corrupt-<ts>` and THROWS { code: 'store-corrupt' } so callers
+ *    surface an actionable error instead of silently resetting state.
+ */
 async function loadStore(file) {
+  let raw
   try {
-    await access(file)
-    const raw = await readFile(file, 'utf8')
-    const parsed = JSON.parse(raw)
-    return {
-      devices: Array.isArray(parsed.devices) ? parsed.devices : [],
-      pairing: parsed.pairing && typeof parsed.pairing === 'object' ? parsed.pairing : null,
-    }
-  } catch {
-    return { devices: [], pairing: null }
+    raw = await readFile(file, 'utf8')
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { devices: [], pairing: null }
+    const err = new Error('security store unreadable: ' + String((e && e.code) || e))
+    err.storeCorrupt = true
+    throw err
   }
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch (e) {
+    await backupCorrupt(file)
+    const err = new Error('security store corrupt (backed up): ' + String((e && e.message) || e))
+    err.storeCorrupt = true
+    throw err
+  }
+  return {
+    devices: Array.isArray(parsed.devices) ? parsed.devices : [],
+    pairing: parsed.pairing && typeof parsed.pairing === 'object' ? parsed.pairing : null,
+  }
+}
+
+/** Copy a corrupt store aside for inspection. The original stays in place so
+ *  the store keeps failing closed (never silently resets to a fresh state). */
+async function backupCorrupt(file) {
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    await copyFile(file, file + '.corrupt-' + Date.now())
+  } catch { /* best-effort */ }
+}
+
+/** Map a store-corruption failure to the canonical error result. */
+function corruptResult(e) {
+  return { error: ERR.STORE_CORRUPT, message: String((e && e.message) || 'security store corrupt') }
+}
+
+/** Wrap a withStoreLock body so corruption never silently resets state. */
+function withStoreGuard(file, fn) {
+  return withStoreLock(file, async () => {
+    try {
+      return await fn()
+    } catch (e) {
+      if (e && e.storeCorrupt) return corruptResult(e)
+      throw e
+    }
+  })
 }
 
 /** Atomic replace: write tmp then rename (same volume => atomic on Windows). */
@@ -212,7 +257,7 @@ function freshTxt(file, plain, when) {
  * reconstructible from the .txt file).
  */
 export async function ensurePairingCode(file = securityFile()) {
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     const now = Date.now()
     if (store.pairing && store.pairing.codeHash && store.pairing.expiresAt > now) {
@@ -229,7 +274,7 @@ export async function ensurePairingCode(file = securityFile()) {
 
 /** Read-only pairing status (for PC-side UI/scripts). */
 export async function pairingStatus(file = securityFile()) {
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     if (!store.pairing || !store.pairing.codeHash) return { present: false }
     return { present: true, expiresAt: store.pairing.expiresAt, expired: store.pairing.expiresAt < Date.now() }
@@ -242,7 +287,7 @@ export async function pairingStatus(file = securityFile()) {
  * consumed code is marked in the .txt so it cannot mislead the user.
  */
 export async function pairDevice(code, deviceName, file = securityFile()) {
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     const p = store.pairing
     if (!p || !p.codeHash) return { error: ERR.PAIRING_USED }
@@ -271,7 +316,7 @@ export async function verifyDevice(deviceId, credential, file = securityFile()) 
   if (typeof deviceId !== 'string' || typeof credential !== 'string' || !deviceId || !credential) {
     return { error: ERR.AUTH_REQUIRED }
   }
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     const dev = store.devices.find((d) => d.id === deviceId)
     if (!dev) return { error: ERR.AUTH_INVALID }
@@ -283,7 +328,7 @@ export async function verifyDevice(deviceId, credential, file = securityFile()) 
 }
 
 export async function listDevices(file = securityFile()) {
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     return store.devices.map((d) => ({
       id: d.id, name: d.name, createdAt: d.createdAt, lastSeen: d.lastSeen,
@@ -292,7 +337,7 @@ export async function listDevices(file = securityFile()) {
 }
 
 export async function revokeDevice(deviceId, file = securityFile()) {
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     const before = store.devices.length
     store.devices = store.devices.filter((d) => d.id !== deviceId)
@@ -303,7 +348,7 @@ export async function revokeDevice(deviceId, file = securityFile()) {
 }
 
 export async function revokeAllDevices(file = securityFile()) {
-  return withStoreLock(file, async () => {
+  return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     store.devices = []
     store.pairing = null

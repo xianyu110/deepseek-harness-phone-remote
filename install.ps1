@@ -127,7 +127,7 @@ $ws  = Join-Path $env:USERPROFILE "Documents"
 $scriptDir = Join-Path $env:USERPROFILE ".dsh\launcher"
 New-Item -ItemType Directory -Force -Path $scriptDir | Out-Null
 
-foreach ($f in @("tailscale_forward.js", "restart_harness.ps1", "stop_harness.ps1", "keep_awake.ps1", "harness-common.ps1")) {
+foreach ($f in @("tailscale_forward.js", "restart_harness.ps1", "stop_harness.ps1", "keep_awake.ps1", "harness-common.ps1", "refresh_pairing.ps1")) {
     if (Test-Path (Join-Path $src $f)) {
         Copy-Item (Join-Path $src $f) (Join-Path $scriptDir $f) -Force
     }

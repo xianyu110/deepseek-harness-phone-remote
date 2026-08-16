@@ -41,7 +41,10 @@ test('isWithin: absolute-path bypass blocked', () => {
 })
 
 test('isWithin: case-insensitive matching', () => {
-  assert.equal(isWithin('c:\\USERS\\zeta\\documents\\file.txt', [ROOT]), true)
+  // Platform-independent: pure string comparison (no os.homedir involved).
+  assert.equal(isWithin('C:\\USERS\\zeta\\DOCUMENTS\\file.txt', ['C:\\Users\\zeta\\Documents']), true)
+  assert.equal(isWithin('c:\\users\\zeta\\documents\\sub\\x', ['C:\\Users\\zeta\\Documents']), true)
+  assert.equal(isWithin('C:\\Users\\zeta\\Other', ['C:\\Users\\zeta\\Documents']), false)
 })
 
 test('protected credential access is denied', () => {
@@ -211,5 +214,36 @@ test('concurrent verify/revoke: revoked credential never resurrects', async () =
     ])
     const after = await verifyDevice(deviceId, credential, f)
     assert.equal(after.error, 'auth-invalid')
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+test('corrupt store: fails closed with a backup, never silently resets', async () => {
+  const f = await tempFile()
+  const fsp = await import('node:fs/promises')
+  try {
+    await fsp.writeFile(f, '{ not json', 'utf8')
+    const v1 = await verifyDevice('x', 'y', f)
+    assert.equal(v1.error, 'store-corrupt')
+    // a backup of the bad content exists and the original is NOT overwritten
+    const dir = path.dirname(f)
+    const base = path.basename(f)
+    const backups = (await fsp.readdir(dir)).filter((n) => n.indexOf(base + '.corrupt-') === 0)
+    assert.ok(backups.length >= 1, 'corrupt store must be backed up')
+    assert.equal(await fsp.readFile(f, 'utf8'), '{ not json', 'original must not be silently overwritten')
+    assert.equal(await fsp.readFile(path.join(dir, backups[0]), 'utf8'), '{ not json')
+    // state is NOT reset: a second operation still fails closed
+    const v2 = await verifyDevice('x', 'y', f)
+    assert.equal(v2.error, 'store-corrupt')
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+test('permission/read error on the store fails closed', async (t) => {
+  const f = await tempFile()
+  const fsp = await import('node:fs/promises')
+  try {
+    // A directory where the store file should be: readFile fails (EISDIR).
+    await fsp.mkdir(f)
+    const v = await verifyDevice('x', 'y', f)
+    assert.equal(v.error, 'store-corrupt')
   } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
 })
