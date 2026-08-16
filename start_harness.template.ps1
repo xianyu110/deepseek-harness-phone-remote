@@ -19,12 +19,20 @@ $logDir = Join-Path $env:USERPROFILE ".dsh\launcher"
 # Missing/broken helpers are FATAL - we never fall back to trusting any
 # localhost listener, and never start a forwarder without them.
 $common = Join-Path $PSScriptRoot "harness-common.ps1"
-if (-not (Test-Path $common) -or -not (Get-Command Get-OwnedHarnessPid -ErrorAction SilentlyContinue)) {
+if (-not (Test-Path $common)) {
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("harness-common.ps1 is missing or broken. Re-run install.ps1.", "DeepSeek Harness")
+    [System.Windows.Forms.MessageBox]::Show("harness-common.ps1 is missing. Re-run install.ps1.", "DeepSeek Harness")
     exit 1
 }
 . $common
+# The helpers must actually be defined (dot-sourcing ran) before we trust them.
+if (-not (Get-Command Get-OwnedHarnessPid -ErrorAction SilentlyContinue) -or
+    -not (Get-Command Get-OwnedForwarderPid -ErrorAction SilentlyContinue) -or
+    -not (Get-Command Sync-RemfsPlugin -ErrorAction SilentlyContinue)) {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show("harness-common.ps1 is broken (helpers missing). Re-run install.ps1.", "DeepSeek Harness")
+    exit 1
+}
 
 function Test-HarnessRunning {
     return ($null -ne (Get-OwnedHarnessPid -Port 3080 -Marker $dshBin))
