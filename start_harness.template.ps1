@@ -91,8 +91,9 @@ if (-not (Test-HarnessListening)) {
     }
 }
 
-# Ensure the Tailscale forwarder whenever the harness is up.
-if ($ready -and (Test-Path $forwardBin) -and -not (Test-ForwardListening)) {
+# Ensure the Tailscale forwarder whenever the harness is up. Re-check the port
+# here (not the $ready flag) so a slow harness boot still gets its forwarders.
+if ((Test-HarnessListening) -and (Test-Path $forwardBin) -and -not (Test-ForwardListening)) {
     $fOut = Join-Path $logDir "forward_$stamp.out.log"
     $fErr = Join-Path $logDir "forward_$stamp.err.log"
     Start-Process -FilePath $node `
@@ -105,7 +106,7 @@ if ($ready -and (Test-Path $forwardBin) -and -not (Test-ForwardListening)) {
 }
 
 # Walk-on-LAN forwarder: same-Wi-Fi access without Tailscale.
-if ($ready -and $lanIP -and (Test-Path $forwardBin)) {
+if ((Test-HarnessListening) -and $lanIP -and (Test-Path $forwardBin)) {
     $lanListening = Get-NetTCPConnection -LocalAddress $lanIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
     if (-not $lanListening) {
         $fOut = Join-Path $logDir "forward_lan_$stamp.out.log"
