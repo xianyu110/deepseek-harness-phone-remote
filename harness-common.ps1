@@ -58,3 +58,33 @@ function Stop-OwnedHarnessStack {
         if (-not (Get-OwnedHarnessPid -Port $Port -Marker $Marker)) { break }
     }
 }
+
+# Plugin files the loader needs (host.js imports dispatch.js/security.js).
+$script:RemfsPluginFiles = @("lib\host.js", "lib\client.js", "lib\security.js", "lib\dispatch.js", "package.json")
+
+# READ-ONLY pre-flight: every plugin file must exist in the vendor source AND
+# the node_modules target directory must exist. Call BEFORE killing anything.
+function Test-RemfsPluginReady {
+    param([string]$Vendor, [string]$NmPkg)
+    if (-not $Vendor -or -not (Test-Path $Vendor)) { return $false }
+    if (-not $NmPkg -or -not (Test-Path $NmPkg)) { return $false }
+    foreach ($f in $script:RemfsPluginFiles) {
+        if (-not (Test-Path (Join-Path $Vendor $f))) { return $false }
+    }
+    return $true
+}
+
+# Copy the plugin from vendor into node_modules. MUST run only while the old
+# harness is dead (its file locks are released). Returns $true when every file
+# landed. Creates missing target subdirectories.
+function Sync-RemfsPlugin {
+    param([string]$Vendor, [string]$NmPkg)
+    if (-not (Test-RemfsPluginReady -Vendor $Vendor -NmPkg $NmPkg)) { return $false }
+    foreach ($f in $script:RemfsPluginFiles) {
+        $dstFile = Join-Path $NmPkg $f
+        New-Item -ItemType Directory -Force -Path (Split-Path $dstFile) | Out-Null
+        Copy-Item (Join-Path $Vendor $f) $dstFile -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path $dstFile)) { return $false }
+    }
+    return $true
+}

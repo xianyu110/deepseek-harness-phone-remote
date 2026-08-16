@@ -89,6 +89,16 @@ $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 # exposed to the network).
 $ready = $true
 if (-not (Test-HarnessRunning)) {
+    # Self-heal: with the harness down, its file locks are released, so sync
+    # the plugin from vendor into node_modules. Abort rather than launch a
+    # harness with a broken plugin import.
+    $remfsVendor = "C:\Users\zeta\.dsh\profiles\web\vendor\remfs-persistent"
+    $remfsNmPkg = "C:\Users\zeta\.dsh\profiles\web\node_modules\@zetaluolang\remfs-persistent"
+    if ((Get-Command Sync-RemfsPlugin -ErrorAction SilentlyContinue) -and -not (Sync-RemfsPlugin -Vendor $remfsVendor -NmPkg $remfsNmPkg)) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show("remfs plugin sync failed. Re-run install.ps1.", "DeepSeek Harness")
+        exit 1
+    }
     $outLog = Join-Path $logDir "harness_$stamp.out.log"
     $errLog = Join-Path $logDir "harness_$stamp.err.log"
 
