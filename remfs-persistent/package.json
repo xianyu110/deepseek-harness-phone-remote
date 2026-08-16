@@ -1,7 +1,7 @@
 {
   "name": "@zetaluolang/remfs-persistent",
-  "version": "1.0.1",
-  "description": "Persistent phone remote workbench for DeepSeek Harness: start sessions / manage workspaces and browse, preview, edit, download, upload PC files from your phone over a trusted RPC channel. One-click Tailscale deploy + install guide in the GitHub repo.",
+  "version": "1.1.0",
+  "description": "Secure remote workspace & filesystem bridge for DeepSeek Harness: device-authenticated RPC, capability-bounded file access, session start/resume from your phone. One-click Tailscale deploy in the GitHub repo.",
   "license": "MIT",
   "type": "module",
   "main": "lib/host.js",

@@ -1,0 +1,54 @@
+# CI: lint (syntax), unit/security tests, and package install smoke test.
+# Kept deliberately light — no heavyweight framework, just node:test + node --check.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check (lint)
+        run: |
+          node --check remfs-persistent/lib/host.js
+          node --check remfs-persistent/lib/client.js
+          node --check remfs-persistent/lib/security.js
+      - name: Security + filesystem tests
+        run: node --test remfs-persistent/test/security.test.js
+      - name: PowerShell syntax check (Windows scripts, via pwsh)
+        shell: pwsh
+        run: |
+          $files = @('install.ps1', 'keep_awake.ps1', 'restart_harness.ps1', 'stop_harness.ps1', 'start_harness.template.ps1')
+          foreach ($f in $files) {
+            $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errs) | Out-Null
+            if ($errs.Count -gt 0) { Write-Error "$f parse errors: $($errs.Count)"; exit 1 }
+          }
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Pack the plugin
+        run: |
+          cd remfs-persistent
+          npm pack --silent
+      - name: Install the tarball into a scratch project
+        run: |
+          cd remfs-persistent
+          TARBALL=$(ls *.tgz | head -1)
+          mkdir -p /tmp/scratch && cd /tmp/scratch
+          npm init -y >/dev/null 2>&1
+          npm install "/github/workspace/remfs-persistent/$TARBALL" >/dev/null 2>&1 || npm install "$OLDPWD/$TARBALL" >/dev/null 2>&1
+          ls node_modules/@zetaluolang/remfs-persistent/lib/
+          node -e "const s = require('./node_modules/@zetaluolang/remfs-persistent/lib/security.js'); console.log('security module ok, exports:', Object.keys(s).length)"

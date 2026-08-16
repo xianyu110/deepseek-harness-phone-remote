@@ -75,7 +75,7 @@ if (-not (Test-HarnessListening)) {
     $trusted = @("--port", "3080", "--trusted-host", "__TSIP__", "--trusted-host", "__TSNAME__")
     if ($lanIP) { $trusted += @("--trusted-host", $lanIP) }
     $proc = Start-Process -FilePath $node `
-        -ArgumentList @($dshBin, "web") + $trusted `
+        -ArgumentList (@($dshBin, "web") + $trusted) `
         -WorkingDirectory $workspace `
         -WindowStyle Hidden `
         -RedirectStandardOutput $outLog `
