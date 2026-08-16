@@ -18,7 +18,7 @@
 
 ```mermaid
 flowchart LR
-  P[手机 / 远程浏览器] -->|Tailscale HTTPS| S[talkscale serve]
+  P[手机 / 远程浏览器] -->|Tailscale HTTPS| S[tailscale serve]
   P -->|Tailscale IP| T[TCP 转发器]
   P -->|同一 Wi-Fi:LAN IP| L[局域网转发器]
   S --> H[DeepSeek Harness Web<br/>127.0.0.1:3080]

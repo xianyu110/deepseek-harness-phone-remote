@@ -23,6 +23,57 @@ test('host source: no whole-drive (C:\\) fallback for the workspace root', () =>
   assert.match(HOST_SRC, /fail closed/, 'host must contain the fail-closed guard')
 })
 
+// 65c52ca audit item 2: the rotation watcher must call rotatePairingCode()
+// (forced rotation), never ensurePairingCode() (which returns null while the
+// current code is still valid -> refresh_pairing.ps1 would do nothing).
+test('host source: startup uses ensurePairingCode, rotation watcher uses rotatePairingCode', () => {
+  assert.match(HOST_SRC, /ensurePairingCode\(\)/, 'startup must ensure a pairing code')
+  const watchCalls = [...HOST_SRC.matchAll(/rotatePairingCode\(\)/g)]
+  assert.ok(watchCalls.length >= 1, 'rotation watcher must call rotatePairingCode()')
+  // the watcher must NOT fall back to ensurePairingCode (no-op rotation)
+  const watcher = HOST_SRC.slice(HOST_SRC.indexOf('pairing-rotation'))
+  assert.doesNotMatch(watcher, /ensurePairingCode\(\)/,
+    'rotation watcher must force a NEW code via rotatePairingCode')
+})
+
+// 65c52ca audit item 4: host.js declares inject ['connection','fs'] but safe
+// workspace-root resolution depends on sandboxPolicy/workspaceRegistry during
+// apply(). The required service lifecycle must be explicit (no accidental
+// plugin ordering), and resolvedRoot (computed once) must be used everywhere -
+// readAllowedFile/writeAllowedFile/resolvePath must NOT re-call workspaceRoot().
+test('host source: sandboxPolicy/workspaceRegistry are explicit injected services', () => {
+  assert.match(HOST_SRC, /inject:\s*\[[^\]]*'sandboxPolicy'[^\]]*\]/,
+    'host must declare sandboxPolicy in inject (explicit lifecycle)')
+  assert.match(HOST_SRC, /inject:\s*\[[^\]]*'workspaceRegistry'[^\]]*\]/,
+    'host must declare workspaceRegistry in inject (explicit lifecycle)')
+})
+
+test('host source: resolvedRoot is used everywhere after apply (no re-resolution)', () => {
+  // resolvedRoot computed once at apply...
+  assert.match(HOST_SRC, /resolvedRoot\s*=\s*workspaceRoot\(\)/, 'resolvedRoot must be computed once')
+  // ...and the adapter methods must reference resolvedRoot, not workspaceRoot()
+  const methods = HOST_SRC.slice(HOST_SRC.indexOf('const adapter'))
+  assert.doesNotMatch(methods, /workspaceRoot\(\)/,
+    'adapter methods must use the resolved root, never re-resolve workspaceRoot()')
+})
+
+// 65c52ca audit item 7: client.js must NOT scatter generated DSH CSS-module
+// selectors (.pI_x6G_*, .uV2eYG_*, ._7KE1Ra_*) through the stylesheet. All
+// upstream-selector compatibility must live in ONE adapter object so a DSH
+// upgrade touches a single place.
+test('client source: upstream CSS-module selectors are isolated in one adapter', () => {
+  assert.match(CLIENT_SRC, /UPSTREAM_SELECTORS\s*=\s*\{/, 'client must define an upstream-selector adapter')
+  const cssBlock = CLIENT_SRC.slice(CLIENT_SRC.indexOf('const CSS'))
+  // every upstream selector in the stylesheet must come from the adapter
+  const hashed = cssBlock.match(/\.(pI_x6G|uV2eYG|_7KE1Ra)_[A-Za-z0-9]+/g) || []
+  assert.equal(hashed.length, 0,
+    'CSS must reference selectors via the adapter, never raw hashed names: ' + hashed.join(', '))
+  // the adapter itself still pins the current hashed names (single source of truth)
+  for (const name of ['pI_x6G_frame', 'pI_x6G_sidebarCol', 'uV2eYG_row', '_7KE1Ra_root']) {
+    assert.ok(CLIENT_SRC.includes(name), 'adapter must pin the upstream selector ' + name)
+  }
+})
+
 test('client source: revoke sends targetDeviceId (never { id })', () => {
   assert.match(CLIENT_SRC, /rpc\('revoke',\s*\{\s*targetDeviceId:\s*id\s*\}/,
     'client must send { targetDeviceId } for revoke')

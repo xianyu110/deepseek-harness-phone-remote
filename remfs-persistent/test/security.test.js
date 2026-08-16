@@ -7,8 +7,9 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   normPath, hasTraversal, isWithin, segmentsDenied, deniedPath, canSetRoots,
-  ensurePairingCode, pairDevice, verifyDevice, listDevices, revokeDevice,
-  revokeAllDevices, parsePairingCode, formatPairingCode, securityFile, buildCrumbs,
+  ensurePairingCode, rotatePairingCode, pairDevice, verifyDevice, listDevices,
+  revokeDevice, revokeAllDevices, parsePairingCode, formatPairingCode,
+  securityFile, buildCrumbs,
 } from '../lib/security.js'
 
 const DOCS = path.join(os.homedir(), 'Documents')
@@ -87,6 +88,33 @@ test('registered workspace inside protected area stays reachable', () => {
   assert.equal(deniedPath('C:\\Users\\zeta\\Documents\\xwechat_files\\other', wp), true)
   // normal workspace root (Documents) does NOT lift the deny
   assert.equal(deniedPath(ROOT + '\\xwechat_files\\data', [ROOT]), true)
+})
+
+// 65c52ca audit item 1: HARD protected paths (credentials, private keys,
+// system files) must NEVER become reachable just because their parent
+// protected directory was registered as a workspace. A workspace registered
+// under .ssh/.aws/Windows/AppData must not make those files accessible.
+test('hard deny: .ssh\\id_rsa stays denied even when .ssh is a registered workspace', () => {
+  const wp = ['C:\\Users\\x\\.ssh'] // attacker registers the protected dir itself
+  assert.equal(deniedPath('C:\\Users\\x\\.ssh\\id_rsa', wp), true)
+  assert.equal(deniedPath('C:\\Users\\x\\.ssh\\id_ed25519', wp), true)
+  // nested registration cannot widen either
+  assert.equal(deniedPath('C:\\Users\\x\\.ssh\\deep\\id_rsa', ['C:\\Users\\x\\.ssh\\deep']), true)
+})
+
+test('hard deny: .aws\\credentials stays denied even when .aws is a registered workspace', () => {
+  const wp = ['C:\\Users\\x\\.aws']
+  assert.equal(deniedPath('C:\\Users\\x\\.aws\\credentials', wp), true)
+  // unrelated file under .aws is still protected unless the workspace is
+  // registered EXACTLY under the protected area (soft-deny semantics)
+  assert.equal(deniedPath('C:\\Users\\x\\.aws\\config', wp), true)
+})
+
+test('hard deny: C:\\Windows\\System32 stays denied even when C:\\Windows is a registered workspace', () => {
+  const wp = ['C:\\Windows']
+  assert.equal(deniedPath('C:\\Windows\\System32', wp), true)
+  assert.equal(deniedPath('C:\\Windows\\System32\\drivers\\etc\\hosts', wp), true)
+  assert.equal(deniedPath('C:\\Windows\\SysWOW64\\ntdll.dll', wp), true)
 })
 
 test('allowlist: phone can only narrow roots, never widen', () => {
@@ -214,6 +242,61 @@ test('pairing txt: consumed code is marked so it cannot mislead', async () => {
     // regeneration after consumption returns a fresh plaintext code
     const code2 = await ensurePairingCode(f)
     assert.ok(code2 && code2 !== code)
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+// 65c52ca audit item 2: refresh_pairing.ps1 must FORCE rotation. The host
+// watcher previously called ensurePairingCode(), which returns null while the
+// current code is still valid - so a manual refresh did nothing. rotatePairingCode()
+// must always mint a new code and overwrite the store + .txt.
+test('rotatePairingCode: forces a NEW code even while the current code is still valid', async () => {
+  const f = await tempFile()
+  try {
+    const first = await ensurePairingCode(f)
+    assert.ok(first, 'a code must exist')
+    // current code is still valid -> ensurePairingCode returns null (no rotation)
+    assert.equal(await ensurePairingCode(f), null)
+    // rotatePairingCode must ALWAYS produce a fresh code
+    const rotated = await rotatePairingCode(f)
+    assert.ok(rotated && rotated !== first)
+    // the .txt is rewritten with the fresh plaintext (check BEFORE pairing,
+    // which marks the txt as consumed)
+    const txt = path.join(path.dirname(f), 'remfs-pairing.txt')
+    const body = await (await import('node:fs/promises')).readFile(txt, 'utf8')
+    assert.ok(body.startsWith(rotated))
+    // the old code must no longer pair
+    const oldPair = await pairDevice(first, 'old-phone', f)
+    assert.equal(oldPair.error, 'pairing-invalid')
+    // the new code pairs fine
+    const newPair = await pairDevice(rotated, 'new-phone', f)
+    assert.ok(newPair.deviceId && newPair.credential)
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+test('rotatePairingCode: works with no prior pairing state', async () => {
+  const f = await tempFile()
+  try {
+    const code = await rotatePairingCode(f)
+    assert.ok(code && code.includes('-'))
+    const p = await pairDevice(code, 'phone', f)
+    assert.ok(p.deviceId && p.credential)
+  } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
+})
+
+test('ensurePairingCode: missing .txt while a valid unrecoverable codeHash remains -> regenerate', async () => {
+  const f = await tempFile()
+  const fsp = await import('node:fs/promises')
+  try {
+    const code = await ensurePairingCode(f)
+    // delete the .txt: the store still holds a VALID, unexpired codeHash, but
+    // the plaintext is now unrecoverable - the user could never pair. A naive
+    // "still valid" check returns null and strands the user; ensurePairingCode
+    // must detect the missing txt and regenerate.
+    await fsp.rm(path.join(path.dirname(f), 'remfs-pairing.txt'), { force: true })
+    const regenerated = await ensurePairingCode(f)
+    assert.ok(regenerated && regenerated !== code, 'must regenerate when the txt is unrecoverable')
+    const p = await pairDevice(regenerated, 'phone', f)
+    assert.ok(p.deviceId && p.credential)
   } finally { await rm(path.dirname(f), { recursive: true, force: true }) }
 })
 

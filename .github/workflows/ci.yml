@@ -94,3 +94,108 @@ jobs:
           npm install "$OLDPWD/$TARBALL" >/dev/null 2>&1 || npm install "$PWD/../../$TARBALL" >/dev/null 2>&1
           ls node_modules/@zetaluolang/remfs-persistent/lib/
           node -e "const s = require('./node_modules/@zetaluolang/remfs-persistent/lib/security.js'); console.log('security module ok, exports:', Object.keys(s).length)"
+
+  # 65c52ca audit item 6: prove the plugin ACTUALLY LOADS in a real, current
+  # DeepSeek Harness. The isolated node tests prove the logic; this job boots a
+  # REAL `dsh web` against a fresh $DSH_HOME profile patched with the plugin
+  # and asserts the /remfs channel registered (the host half logs
+  # "[remfs-persistent] host applied: /remfs channel registered").
+  real-dsh-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install current @deepseek-ai/dsh
+        run: npm i -g @deepseek-ai/dsh
+      - name: Fresh web profile patched with remfs-persistent
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$HOME/.dsh-smoke"
+          mkdir -p "$DSH_HOME/profiles/web/vendor"
+          cp -r remfs-persistent "$DSH_HOME/profiles/web/vendor/remfs-persistent"
+          mkdir -p "$DSH_HOME/profiles/web/node_modules/@zetaluolang"
+          cp -r remfs-persistent "$DSH_HOME/profiles/web/node_modules/@zetaluolang/remfs-persistent"
+          printf -- '- insert:\n    - id: remfs-persistent\n      name: "@zetaluolang/remfs-persistent"\n      inject: [connection, fs, sandboxPolicy, workspaceRegistry]\n' > "$DSH_HOME/profiles/web/cordis.patch.yml"
+          echo "--- profile patch ---"
+          cat "$DSH_HOME/profiles/web/cordis.patch.yml"
+      - name: Boot dsh web and verify plugin apply + /remfs registration
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$HOME/.dsh-smoke"
+          export DSH_TELEMETRY_DISABLED=1
+          (dsh web --port 3180 > dsh-boot.log 2>&1 &)
+          REGISTERED=""
+          for i in $(seq 1 120); do
+            if grep -q "host applied: /remfs channel registered" dsh-boot.log 2>/dev/null; then
+              REGISTERED=yes
+              break
+            fi
+            if ! pgrep -f "dsh web" >/dev/null; then
+              echo "::error::dsh web exited before /remfs registered"
+              cat dsh-boot.log
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ -z "$REGISTERED" ]; then
+            echo "::error::/remfs channel never registered (plugin apply failed?)"
+            cat dsh-boot.log
+            exit 1
+          fi
+          echo "REAL-DSH SMOKE OK: plugin applied, /remfs registered"
+          grep -E "remfs-persistent" dsh-boot.log | head -5
+          pkill -f "dsh web" || true
+
+  # 65c52ca audit item 6 (non-blocking): DSH is a developer preview and
+  # explicitly allows compatibility-breaking changes. This job re-runs the
+  # same smoke against the 'next' dist-tag (the preview channel) and is
+  # NON-BLOCKING: it warns when upstream's next breaks our plugin without
+  # failing the suite. It uses continue-on-error so a red result here is a
+  # heads-up, not a gate.
+  real-dsh-smoke-upstream:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dsh from the upstream 'next' channel
+        run: npm i -g @deepseek-ai/dsh@next
+      - name: Fresh web profile patched with remfs-persistent
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$HOME/.dsh-smoke-next"
+          mkdir -p "$DSH_HOME/profiles/web/vendor"
+          cp -r remfs-persistent "$DSH_HOME/profiles/web/vendor/remfs-persistent"
+          mkdir -p "$DSH_HOME/profiles/web/node_modules/@zetaluolang"
+          cp -r remfs-persistent "$DSH_HOME/profiles/web/node_modules/@zetaluolang/remfs-persistent"
+          printf -- '- insert:\n    - id: remfs-persistent\n      name: "@zetaluolang/remfs-persistent"\n      inject: [connection, fs, sandboxPolicy, workspaceRegistry]\n' > "$DSH_HOME/profiles/web/cordis.patch.yml"
+      - name: Boot dsh web (next) and verify /remfs registration (non-blocking)
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$HOME/.dsh-smoke-next"
+          export DSH_TELEMETRY_DISABLED=1
+          (dsh web --port 3181 > dsh-boot-next.log 2>&1 &)
+          REGISTERED=""
+          for i in $(seq 1 120); do
+            if grep -q "host applied: /remfs channel registered" dsh-boot-next.log 2>/dev/null; then
+              REGISTERED=yes
+              break
+            fi
+            if ! pgrep -f "dsh web" >/dev/null; then
+              echo "::warning::upstream dsh web exited before /remfs registered (non-blocking)"
+              cat dsh-boot-next.log
+              exit 0
+            fi
+            sleep 2
+          done
+          if [ -z "$REGISTERED" ]; then
+            echo "::warning::upstream 'next' may have broken our plugin - /remfs never registered (non-blocking)"
+            cat dsh-boot-next.log
+          else
+            echo "UPSTREAM SMOKE OK: plugin still compatible with dsh next"
+          fi
+          pkill -f "dsh web" || true

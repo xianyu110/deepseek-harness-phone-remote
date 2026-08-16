@@ -64,10 +64,12 @@ try {
         exit 1
     }
 
-    # --- 3) restart_harness.ps1 derives the owned forwarder IP ---
+    # --- 3) restart_harness.ps1 derives the OWNED FORWARDER IDENTITY from the
+    #        launcher (the forwarder bin path), never an empty IP list, and the
+    #        owned forwarders are stopped by exact command-line identity. ---
     $restartSrc = Get-Content (Join-Path $root "restart_harness.ps1") -Raw
-    if ($restartSrc -notmatch '\$forwardIPs\s*\+=\s*\$Matches\[1\]' -or $restartSrc -notmatch '\$tailscaleIP') {
-        Write-Error "restart_harness.ps1 must derive the forwarder IP from the launcher"
+    if ($restartSrc -notmatch '\$forwarderBin\s*=\s*Join-Path' -or $restartSrc -notmatch 'tailscale_forward\.js') {
+        Write-Error "restart_harness.ps1 must derive the forwarder bin path from the launcher"
         exit 1
     }
     if ($restartSrc -match 'ForwarderIPs\s+@\(\)') {
@@ -116,6 +118,76 @@ try {
         if ($foreign2) { Stop-Process -Id $foreign2.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $foreign2.Dir -Recurse -Force -ErrorAction SilentlyContinue }
         if ($kap) { Stop-Process -Id $kap.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $kap.Dir -Recurse -Force -ErrorAction SilentlyContinue }
         Remove-Item $keepAwakePid -Force -ErrorAction SilentlyContinue
+    }
+
+    # --- 5) LAN forwarder lifecycle (65c52ca audit item 3): stop/restart must
+    #        kill EVERY owned forwarder (Tailscale IP AND the dynamic LAN IP),
+    #        tracked by PID + exact command-line identity - never only the
+    #        Tailscale IP. A FOREIGN listener on a LAN IP must fail visibly. ---
+    $fwdBinFake = "C:\Fake\Not\Our\Path\tailscale_forward.js"
+    $fwdLan = $null
+    $fwdTs = $null
+    $foreign3 = $null
+    try {
+        # two forwarder-like processes (LAN + Tailscale) whose cmdline contains
+        # the forwarder bin path, plus a foreign process that does not
+        $fwdLan = New-DummyServer -Port 3128 -Marker $fwdBinFake
+        $fwdTs = New-DummyServer -Port 3129 -Marker $fwdBinFake
+        $foreign3 = New-DummyServer -Port 3130 -Marker "not-a-forwarder"
+
+        $allOwned = Get-OwnedForwarderPids -ForwarderBin $fwdBinFake
+        if ($null -eq $allOwned) { Write-Error "Get-OwnedForwarderPids returned null"; exit 1 }
+        if ($allOwned -notcontains $fwdLan.Proc.Id -or $allOwned -notcontains $fwdTs.Proc.Id) {
+            Write-Error "Get-OwnedForwarderPids must find ALL owned forwarders by cmdline identity (got: $($allOwned -join ','))"
+            exit 1
+        }
+        if ($allOwned -contains $foreign3.Proc.Id) {
+            Write-Error "Get-OwnedForwarderPids must NOT match a process without the forwarder bin path"
+            exit 1
+        }
+
+        # Stop-OwnedHarnessStack -ForwarderBin kills BOTH owned forwarders,
+        # leaves the foreign one alive.
+        Stop-OwnedHarnessStack -Marker "unused-marker" -ForwarderBin $fwdBinFake -Port 3080
+        if (Get-Process -Id $fwdLan.Proc.Id -ErrorAction SilentlyContinue) {
+            Write-Error "LAN forwarder survived Stop-OwnedHarnessStack"
+            exit 1
+        }
+        if (Get-Process -Id $fwdTs.Proc.Id -ErrorAction SilentlyContinue) {
+            Write-Error "Tailscale forwarder survived Stop-OwnedHarnessStack"
+            exit 1
+        }
+        if (-not (Get-Process -Id $foreign3.Proc.Id -ErrorAction SilentlyContinue)) {
+            Write-Error "FOREIGN process killed by Stop-OwnedHarnessStack (forwarder bin mismatch)!"
+            exit 1
+        }
+
+        # stop/restart must derive the forwarder bin path (not only an IP list),
+        # and the start template must fail VISIBLY on a foreign LAN listener.
+        $stopSrc = Get-Content (Join-Path $root "stop_harness.ps1") -Raw
+        if ($stopSrc -notmatch 'ForwarderBin' -or $stopSrc -notmatch 'tailscale_forward\.js') {
+            Write-Error "stop_harness.ps1 must stop ALL forwarders by bin-path identity (ForwarderBin)"
+            exit 1
+        }
+        $restartSrc2 = Get-Content (Join-Path $root "restart_harness.ps1") -Raw
+        if ($restartSrc2 -notmatch 'ForwarderBin' -or $restartSrc2 -notmatch 'tailscale_forward\.js') {
+            Write-Error "restart_harness.ps1 must stop ALL forwarders by bin-path identity (ForwarderBin)"
+            exit 1
+        }
+        $tplSrc = Get-Content (Join-Path $root "start_harness.template.ps1") -Raw
+        if ($tplSrc -notmatch 'Get-OwnedForwarderPid -ListenIP \$lanIP') {
+            Write-Error "start_harness template must verify the LAN listener is OURS (Get-OwnedForwarderPid -ListenIP \$lanIP)"
+            exit 1
+        }
+        if ($tplSrc -notmatch 'foreign|FOREIGN|foreign process') {
+            Write-Error "start_harness template must fail visibly when a foreign process owns the LAN:3080 listener"
+            exit 1
+        }
+        Write-Host "LAN forwarder lifecycle: OK (all owned stopped by bin identity, foreign survives, template fails visibly on foreign LAN listener)"
+    } finally {
+        if ($fwdLan) { Stop-Process -Id $fwdLan.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $fwdLan.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($fwdTs) { Stop-Process -Id $fwdTs.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $fwdTs.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($foreign3) { Stop-Process -Id $foreign3.Proc.Id -Force -ErrorAction SilentlyContinue; Remove-Item $foreign3.Dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
     Write-Host "launcher ownership: OK (foreign not trusted/killed, owned killed, forwarder IP derived)"

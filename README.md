@@ -15,8 +15,9 @@ writing, uploading and downloading files on the host.
 
 ## Why
 
-- Harness binds `127.0.0.1` — a deliberate, sane default. This project keeps it:
-  the GUI is never exposed to the LAN or public internet.
+- Harness binds `127.0.0.1` — a deliberate, sane default. The Harness process
+  itself stays loopback-bound; only the opt-in forwarders (Tailscale IP and,
+  when enabled, the LAN IP) expose selected interfaces.
 - A phone browser still can't reach loopback, and the GUI's directory picker is
   a loopback-only privileged method — so this plugin adds a **secure path**
   (Tailscale + LAN forwarders) and a **filesystem/workspace bridge** for exactly
@@ -29,7 +30,7 @@ writing, uploading and downloading files on the host.
 
 ```mermaid
 flowchart LR
-  P[Phone / remote browser] -->|Tailscale HTTPS| S[talkscale serve]
+  P[Phone / remote browser] -->|Tailscale HTTPS| S[tailscale serve]
   P -->|Tailscale IP| T[TCP forwarder]
   P -->|same Wi-Fi: LAN IP| L[LAN forwarder]
   S --> H[DeepSeek Harness Web<br/>127.0.0.1:3080]

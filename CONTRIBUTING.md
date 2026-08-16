@@ -7,7 +7,7 @@ docs first.
 
 ## Development environment
 
-- Windows 10/11 + Node.js ≥ 18 + DeepSeek Harness (`npx dsh web`).
+- Windows 10/11 + Node.js ≥ 18 + DeepSeek Harness (`npx @deepseek-ai/dsh web`).
 - The plugin lives in `remfs-persistent/`:
   - `lib/host.js` — the /remfs RPC channel (Cordis host half).
   - `lib/client.js` — the phone workbench UI (module-table client half).

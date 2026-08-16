@@ -3,17 +3,19 @@
 // All protocol logic lives in ./dispatch.js (unit-testable); this file only
 // adapts the Cordis runtime (ctx.fs / workspaceRegistry) to it.
 //
-// inject is REQUIRED: cross-entry services (connection, fs) must be declared so
-// the loader resolves them before apply runs; a bare ctx.get() in apply
-// resolves undefined and the channel never registers.
-import { ensurePairingCode } from './security.js'
+// inject is REQUIRED: the loader resolves cross-entry services before apply
+// runs. sandboxPolicy/workspaceRegistry are declared explicitly because the
+// safe workspace-root resolution depends on them at apply time - relying on
+// accidental plugin ordering would make the fail-closed root resolution
+// nondeterministic.
+import { ensurePairingCode, rotatePairingCode } from './security.js'
 import { createDispatcher } from './dispatch.js'
 import { access, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
 export default {
-  inject: ['connection', 'fs'],
+  inject: ['connection', 'fs', 'sandboxPolicy', 'workspaceRegistry'],
   apply(ctx) {
     const fs = ctx.get('fs')
     if (fs === undefined) {
@@ -53,8 +55,12 @@ export default {
       return
     }
 
+    // resolvedRoot is the ONLY root used after apply; adapter methods must
+    // never re-resolve via ctx (the registry could change mid-flight).
+    const root = resolvedRoot
+
     const adapter = {
-      workspaceRoot: () => resolvedRoot,
+      workspaceRoot: () => root,
       policy: () => {
         const sp = ctx.get('sandboxPolicy')
         if (sp && typeof sp.resolve === 'function') {
@@ -64,7 +70,7 @@ export default {
       },
       readAllowedFile: async () => {
         try {
-          const target = await fs.resolve(workspaceRoot() + '\\.remfs-roots.json', { cwd: workspaceRoot() })
+          const target = await fs.resolve(root + '\\.remfs-roots.json', { cwd: root })
           const text = await fs.readText(target)
           return { exists: true, text }
         } catch (e) {
@@ -76,10 +82,10 @@ export default {
         }
       },
       writeAllowedFile: async (roots) => {
-        const target = await fs.resolve(workspaceRoot() + '\\.remfs-roots.json', { cwd: workspaceRoot() })
+        const target = await fs.resolve(root + '\\.remfs-roots.json', { cwd: root })
         await fs.writeText(target, JSON.stringify(roots, null, 2), undefined, undefined, adapter.policy())
       },
-      resolvePath: async (p) => ({ target: await fs.resolve(p, { cwd: workspaceRoot() }) }),
+      resolvePath: async (p) => ({ target: await fs.resolve(p, { cwd: root }) }),
       processPath: (t) => fs.processPath(t),
       stat: (t) => fs.stat(t),
       listDir: (t) => fs.listDir(t),
@@ -120,6 +126,9 @@ export default {
     // Pairing-rotation control: refresh_pairing.ps1 must NOT mutate the store
     // (single-writer: only THIS host process writes remfs-security.json). It
     // drops a flag file and we rotate here, under our own store lock.
+    // rotatePairingCode() FORCES a new code - ensurePairingCode() would return
+    // null while the current code is still valid and the manual refresh would
+    // silently do nothing.
     ctx.effect(() => {
       const flag = path.join(os.homedir(), '.dsh', 'remfs-pairing-rotate.flag')
       const poll = async () => {
@@ -128,8 +137,8 @@ export default {
         } catch { return }
         try { await unlink(flag) } catch { /* ignore */ }
         try {
-          const plain = await ensurePairingCode()
-          console.log('[remfs-persistent] pairing code rotated: ' + (plain || '(unchanged)') + ' (see ~/.dsh/remfs-pairing.txt)')
+          const plain = await rotatePairingCode()
+          console.log('[remfs-persistent] pairing code rotated: ' + plain + ' (see ~/.dsh/remfs-pairing.txt)')
         } catch (e) {
           console.log('[remfs-persistent] pairing rotation failed: ' + String((e && e.message) || e))
         }

@@ -4,7 +4,8 @@
 # If they are already running, just open the browser.
 #
 # All ASCII on purpose: Windows PowerShell 5.1 mis-decodes UTF-8 no-BOM scripts.
-# Placeholders __TSIP__, __TSNAME__, __WORKSPACE__ and __DSHBIN__ are filled by install.ps1.
+# Placeholders __TSIP__, __TSNAME__, __WORKSPACE__, __DSHBIN__ and
+# __DSHVERSION__ are filled by install.ps1.
 
 $ErrorActionPreference = "Continue"
 
@@ -12,6 +13,7 @@ $url = "http://127.0.0.1:3080"
 $workspace = "__WORKSPACE__"
 $node = "C:\Program Files\nodejs\node.exe"
 $dshBin = "__DSHBIN__"
+$dshVersion = "__DSHVERSION__"
 $logDir = Join-Path $env:USERPROFILE ".dsh\launcher"
 
 # Process-ownership helpers: "port listening" alone is never treated as "our
@@ -76,7 +78,7 @@ if (-not (Test-Path $node)) {
 }
 if (-not (Test-Path $dshBin)) {
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("dsh not found: $dshBin`nRe-run: npx dsh web once to restore the cache.", "DeepSeek Harness")
+    [System.Windows.Forms.MessageBox]::Show("dsh not found: $dshBin`nRe-run: npx @deepseek-ai/dsh web once to restore the cache.", "DeepSeek Harness")
     exit 1
 }
 
@@ -107,6 +109,7 @@ if (-not (Test-HarnessRunning)) {
     # the /api browser-trust fence.
     $trusted = @("--port", "3080", "--trusted-host", "__TSIP__", "--trusted-host", "__TSNAME__")
     if ($lanIP) { $trusted += @("--trusted-host", $lanIP) }
+    Write-Host "Launching DeepSeek Harness (dsh v$dshVersion)..."
     $proc = Start-Process -FilePath $node `
         -ArgumentList (@($dshBin, "web") + $trusted) `
         -WorkingDirectory $workspace `
@@ -140,17 +143,30 @@ if ((Test-HarnessRunning) -and (Test-Path $forwardBin) -and -not (Test-ForwardRu
 
 # Walk-on-LAN forwarder: only when explicitly enabled.
 if ($lanIP -and (Test-HarnessRunning) -and (Test-Path $forwardBin)) {
-    $lanListening = Get-NetTCPConnection -LocalAddress $lanIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-    if (-not $lanListening) {
-        $fOut = Join-Path $logDir "forward_lan_$stamp.out.log"
-        $fErr = Join-Path $logDir "forward_lan_$stamp.err.log"
-        Start-Process -FilePath $node `
-            -ArgumentList @($forwardBin, $lanIP, "3080", "3080") `
-            -WorkingDirectory $workspace `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $fOut `
-            -RedirectStandardError $fErr | Out-Null
-        Start-Sleep -Seconds 1
+    $lanOwned = Get-OwnedForwarderPid -ListenIP $lanIP -Port 3080
+    if (-not $lanOwned) {
+        $lanForeign = Get-NetTCPConnection -LocalAddress $lanIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
+        if ($lanForeign) {
+            # A FOREIGN process already listens on our LAN IP:3080. Never treat
+            # the port as satisfied, never expose it - fail VISIBLY instead of
+            # silently skipping the forwarder.
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.MessageBox]::Show(
+                "A foreign process is already listening on $lanIP`:3080.`nThe walk-on-LAN forwarder was NOT started - investigate the conflict (or disable walk-on-LAN).",
+                "DeepSeek Harness - LAN conflict"
+            )
+            Write-Host "[!] FOREIGN process owns $lanIP`:3080 - LAN forwarder NOT started (see dialog)." -ForegroundColor Red
+        } else {
+            $fOut = Join-Path $logDir "forward_lan_$stamp.out.log"
+            $fErr = Join-Path $logDir "forward_lan_$stamp.err.log"
+            Start-Process -FilePath $node `
+                -ArgumentList @($forwardBin, $lanIP, "3080", "3080") `
+                -WorkingDirectory $workspace `
+                -WindowStyle Hidden `
+                -RedirectStandardOutput $fOut `
+                -RedirectStandardError $fErr | Out-Null
+            Start-Sleep -Seconds 1
+        }
     }
 }
 

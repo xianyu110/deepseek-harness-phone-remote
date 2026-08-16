@@ -18,17 +18,19 @@ if (-not (Test-Path $common)) {
 # Identify our harness marker from the launcher's own $dshBin line.
 $startScript = Join-Path $scriptDir "start_harness.ps1"
 $marker = ""
-$forwardIPs = @()
 if (Test-Path $startScript) {
     $dshLine = Get-Content $startScript | Where-Object { $_ -match '^\$dshBin\s*=\s*"' } | Select-Object -First 1
     if ($dshLine -and $dshLine -match '"([^"]+)"') { $marker = $Matches[1] }
-    $tsLine = Get-Content $startScript | Where-Object { $_ -match '^\$tailscaleIP\s*=\s*"' } | Select-Object -First 1
-    if ($tsLine -and $tsLine -match '"([^"]+)"') { $forwardIPs += $Matches[1] }
 }
+# The forwarder bin path is the exact command-line identity of EVERY forwarder
+# we own (Tailscale IP forwarder AND the dynamic walk-on-LAN forwarder). Stop
+# them ALL by that identity - deriving only the Tailscale IP would leave the
+# LAN forwarder running.
+$forwarderBin = Join-Path $scriptDir "tailscale_forward.js"
 
 # 1. Kill ONLY processes this project owns (harness + our forwarders).
 if ($marker -and (Get-Command Stop-OwnedHarnessStack -ErrorAction SilentlyContinue)) {
-    Stop-OwnedHarnessStack -Marker $marker -ForwarderIPs $forwardIPs -Port 3080
+    Stop-OwnedHarnessStack -Marker $marker -ForwarderBin $forwarderBin -Port 3080
 } elseif ($marker) {
     $conn = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
     if ($conn) {

@@ -9,6 +9,26 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
     const React = require('react')
 
+    // ── Upstream DSH CSS-module selector adapter (65c52ca audit item 7) ──────
+    // The DeepSeek Harness web shell uses GENERATED CSS-module class names
+    // (e.g. .pI_x6G_frame) that change between DSH builds. ALL upstream
+    // selector coupling lives in this one object so a DSH upgrade touches a
+    // single adapter instead of scattering hashed selectors through the CSS
+    // below. The mobile layout tweaks target these classes because DSH exposes
+    // no stable slot seam for the conversation grid on small screens.
+    const UPSTREAM_SELECTORS = {
+      row: '.uV2eYG_row',
+      trailing: '.uV2eYG_trailing',
+      card: '.uV2eYG_card',
+      root: '._7KE1Ra_root',
+      trigger: '._7KE1Ra_trigger',
+      frame: '.pI_x6G_frame',
+      centerCol: '.pI_x6G_centerCol',
+      sidebarCol: '.pI_x6G_sidebarCol',
+      detailsCol: '.pI_x6G_detailsCol',
+      handle: '.pI_x6G_handle',
+    }
+
     const CSS = `
 .remfs-block{background:var(--dsw-specific-sidebar-fill,#202024);color:var(--dsw-alias-label-primary,#eee);display:flex;flex-direction:column;font-size:13px;font-family:system-ui,sans-serif;height:min(640px,74vh);min-height:340px;border:1px solid rgba(128,128,128,.2);border-radius:10px;overflow:hidden}
 .remfs-panel{position:fixed;right:0;top:0;bottom:0;width:min(430px,96vw);background:var(--dsw-specific-sidebar-fill,#202024);color:var(--dsw-alias-label-primary,#eee);z-index:120;box-shadow:-8px 0 24px rgba(0,0,0,.35);display:flex;flex-direction:column;font-size:13px;font-family:system-ui,sans-serif}
@@ -72,22 +92,22 @@ window.__ModuleLoader__.load({
 .remfs-toast-success{border-color:rgba(46,125,50,.85)}
 .remfs-toast-error{border-color:rgba(224,108,108,.85);color:#e06c6c}
 @media (max-width: 700px) {
-  .uV2eYG_row { flex-wrap: wrap; row-gap: 8px; }
-  .uV2eYG_trailing { flex: 1 1 100%; min-width: 100%; margin-left: 0; }
-  ._7KE1Ra_root, ._7KE1Ra_trigger { width: 100%; }
-  .uV2eYG_card { padding-bottom: 8px; }
-  .pI_x6G_centerCol { position: relative; z-index: 5; }
+  ${UPSTREAM_SELECTORS.row} { flex-wrap: wrap; row-gap: 8px; }
+  ${UPSTREAM_SELECTORS.trailing} { flex: 1 1 100%; min-width: 100%; margin-left: 0; }
+  ${UPSTREAM_SELECTORS.root}, ${UPSTREAM_SELECTORS.trigger} { width: 100%; }
+  ${UPSTREAM_SELECTORS.card} { padding-bottom: 8px; }
+  ${UPSTREAM_SELECTORS.centerCol} { position: relative; z-index: 5; }
 }
 .remfs-sbar{display:none;position:fixed;left:10px;bottom:16px;z-index:1000;width:38px;height:38px;border:1px solid rgba(128,128,128,.35);border-radius:50%;background:rgba(20,20,24,.8);color:var(--dsw-alias-label-primary,#eee);font-size:17px;cursor:grab;align-items:center;justify-content:center;padding:0;touch-action:none;-webkit-user-select:none;user-select:none}
 .remfs-sbar:active{cursor:grabbing}
 .remfs-sbar:hover{background:rgba(40,40,48,.85)}
 @media (max-width: 700px) {
-  .pI_x6G_frame { grid-template-columns: 0px 1fr 0px !important; }
-  .pI_x6G_centerCol { grid-column: 2 !important; }
-  .pI_x6G_sidebarCol { display: none !important; }
-  .pI_x6G_detailsCol { display: none !important; }
-  .pI_x6G_handle { display: none !important; }
-  html.remfs-sidebar-open .pI_x6G_sidebarCol { display: flex !important; position: fixed; left: 0; top: 0; bottom: 0; z-index: 105; box-shadow: 4px 0 20px rgba(0,0,0,.35); }
+  ${UPSTREAM_SELECTORS.frame} { grid-template-columns: 0px 1fr 0px !important; }
+  ${UPSTREAM_SELECTORS.centerCol} { grid-column: 2 !important; }
+  ${UPSTREAM_SELECTORS.sidebarCol} { display: none !important; }
+  ${UPSTREAM_SELECTORS.detailsCol} { display: none !important; }
+  ${UPSTREAM_SELECTORS.handle} { display: none !important; }
+  html.remfs-sidebar-open ${UPSTREAM_SELECTORS.sidebarCol} { display: flex !important; position: fixed; left: 0; top: 0; bottom: 0; z-index: 105; box-shadow: 4px 0 20px rgba(0,0,0,.35); }
   .remfs-sbar{display:flex}
 }
 `
@@ -130,7 +150,7 @@ window.__ModuleLoader__.load({
         tooLarge: '文件超过 5MB,暂不支持预览/下载', binary: '二进制文件,点击下载查看',
         uploadHint: '⬆ 上传文本文件到当前目录',
         managerTitle: '可访问目录(每行一个,手机端只能浏览这些目录):',
-        exampleRoots: 'C:\\Users\\zeta\\Documents\nD:\\素材',
+        exampleRoots: 'C:\\Users\\<user>\\Documents\nD:\\素材',
         savedToast: '✅ 已保存: ', uploadedToast: '✅ 已上传: ',
         sessionStarted: '✅ 已在此文件夹开始新会话', wsOpened: '✅ 已打开工作区并开始新会话',
         rootsSaved: '✅ 可访问目录已保存({n} 个)', saveFailed: '❌ 保存失败',
@@ -163,7 +183,7 @@ window.__ModuleLoader__.load({
         tooLarge: 'File exceeds 5 MB — preview/download unsupported', binary: 'Binary file — tap Download to view',
         uploadHint: '⬆ Upload a text file to this folder',
         managerTitle: 'Allowed dirs (one per line; the phone can only browse these):',
-        exampleRoots: 'C:\\Users\\zeta\\Documents\nD:\\Assets',
+        exampleRoots: 'C:\\Users\\<user>\\Documents\nD:\\Assets',
         savedToast: '✅ Saved: ', uploadedToast: '✅ Uploaded: ',
         sessionStarted: '✅ Session started in this folder', wsOpened: '✅ Workspace opened, new session started',
         rootsSaved: '✅ Allowed dirs saved ({n})', saveFailed: '❌ Save failed',

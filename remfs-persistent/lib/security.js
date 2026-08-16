@@ -27,13 +27,27 @@ export const CODE_GROUPS = 8 // display groups for the pairing code
 export const CODE_GROUP_CHARS = 4 // hex chars per group (128-bit typable code)
 
 // Protected path segments (any position) and protected file name patterns.
+// SOFT-DENY: directory segments that block access by default, but a workspace
+// registered EXACTLY under one of them may be reachable (the phone can still
+// read a folder the PC user deliberately registered). These are user-data
+// privacy boundaries (WeChat/WPS/AppData), not credentials or system files.
 export const DENY_SEGMENTS = new Set([
   'system volume information', '$recycle.bin', 'recovery', 'config.msi', '$sysreset',
-  'windows', 'perflogs', 'msocache', 'windows.old', '$winreagent',
+  'perflogs', 'msocache', 'windows.old', '$winreagent',
   'program files', 'program files (x86)', 'programdata',
   'appdata', 'application data',
   'xwechat_files', 'kingsoftdata', 'wpscloudsvr', 'tencent files',
 ])
+
+// HARD-DENY directory segments: system directories that must NEVER be
+// reachable remotely, even when a workspace is registered under a parent
+// protected directory. Registering C:\Windows as a workspace must not expose
+// System32/SysWOW64 (system files, drivers, binaries).
+export const HARD_DENY_SEGMENTS = new Set(['windows', 'system32', 'syswow64'])
+
+// HARD-DENY file patterns: credentials, private keys and system files. These
+// are NEVER reachable even when the parent protected directory (e.g. .ssh,
+// .aws) is registered as a workspace.
 export const DENY_FILE = /(^|[/\\])\.ssh([/\\]|$)|(^|[/\\])\.git([/\\]|$)|(^|[/\\])\.aws([/\\]|$)|(^|[/\\])\.gnupg([/\\]|$)|(^|[/\\])\.config[/\\]gcloud([/\\]|$)|(^|[/\\])\.env(\.[a-z0-9_-]+)?$|(^|[/\\])id_(rsa|ed25519|dsa|ecdsa)(\.pub)?$|\.(pem|key|pfx|p12)$|(^|[/\\])\.credentials\.ya?ml$|(^|[/\\])ntuser\.dat$|^[A-Za-z]:[/\\](sam|system|security)(\.|$)/i
 
 export const ERR = {
@@ -84,31 +98,56 @@ export function isWithin(p, roots) {
 
 /** True when any path segment is protected, or the name matches DENY_FILE. */
 export function segmentsDenied(p) {
-  const lower = normPath(p)
-  if (!lower) return false
-  const segs = lower.split(/[\\/]/).filter(Boolean)
-  return segs.some((s) => DENY_SEGMENTS.has(s)) || DENY_FILE.test(String(p))
+  return hardDenied(p) || softDenied(p)
 }
 
 /**
- * Deny decision for a canonical path, with a registered-workspace escape hatch:
- * a path inside a protected area is reachable only when it lies under a
- * registered workspace whose OWN path is inside that protected area.
+ * Deny decision for a canonical path, with split HARD/SOFT semantics:
+ *
+ *  - HARD deny (credentials, private keys, system files/dirs): NEVER
+ *    escapable. A workspace registered under .ssh/.aws/Windows/AppData etc.
+ *    must not make these reachable remotely.
+ *  - SOFT deny (user-data privacy dirs like WeChat/WPS/AppData): denied by
+ *    default, but a workspace registered EXACTLY under the protected area is
+ *    reachable (the PC user deliberately registered that folder).
+ *
  * @param p - canonical (realpath) path.
  * @param workspaceRoots - list of registered workspace paths (their `.path`).
  */
 export function deniedPath(p, workspaceRoots) {
   const lower = normPath(p)
   if (!lower) return false
-  if (!segmentsDenied(lower)) return false
+  if (hardDenied(lower)) return true
+  if (!softDenied(lower)) return false
   if (Array.isArray(workspaceRoots)) {
     for (const w of workspaceRoots) {
       const wp = normPath(w)
       if (!wp) continue
-      if (segmentsDenied(wp) && (lower === wp || lower.startsWith(wp + '\\'))) return false
+      if (softDenied(wp) && (lower === wp || lower.startsWith(wp + '\\'))) return false
     }
   }
   return true
+}
+
+/** True when any HARD-deny segment (system dirs) or DENY_FILE pattern
+ *  (credentials/private keys/system files) matches. Never escapable. */
+export function hardDenied(p) {
+  const lower = normPath(p)
+  if (!lower) return false
+  const segs = lower.split(/[\\/]/).filter(Boolean)
+  if (segs.some((s) => HARD_DENY_SEGMENTS.has(s))) return true
+  return DENY_FILE.test(String(p))
+}
+
+/** True when the path contains a SOFT-deny directory segment (user-data
+ *  privacy boundary). Escapable only by a workspace registered exactly under
+ *  the protected area. Hidden credential dirs (.ssh/.aws/...) are NOT here:
+ *  DENY_FILE already hard-denies them. */
+export function softDenied(p) {
+  const lower = normPath(p)
+  if (!lower) return false
+  const segs = lower.split(/[\\/]/).filter(Boolean)
+  return segs.some((s) => DENY_SEGMENTS.has(s))
 }
 
 /**
@@ -255,25 +294,58 @@ function freshTxt(file, plain, when) {
   return { file, body: plain + '\n' + when + '\n' }
 }
 
+/** True when the pairing .txt currently exposes a usable (non-consumed) code.
+ *  Missing/unreadable txt means the plaintext is UNRECOVERABLE even though a
+ *  valid codeHash may remain in the store - the user could never pair. */
+async function pairingTxtUsable(file) {
+  try {
+    const body = await readFile(pairingTxtFile(file), 'utf8')
+    const first = String(body).split(/\r?\n/)[0] || ''
+    return !!first && !/^CONSUMED/.test(first)
+  } catch {
+    return false
+  }
+}
+
+/** Mint a brand-new pairing code into the store and .txt (store already
+ *  loaded under the lock). Returns the plaintext. */
+async function writeFreshPairing(store, file, now) {
+  const code = randomToken(16) // 128-bit, one-time, TTL-bounded
+  const plain = formatPairingCode(code)
+  store.pairing = { codeHash: sha256(code), expiresAt: now + PAIRING_TTL_MS }
+  await saveStore(file, store)
+  await writePairingTxt(freshTxt(pairingTxtFile(file), plain, new Date().toISOString()))
+  return plain
+}
+
 /**
  * Ensure a valid, unexpired pairing code exists; regenerates when absent,
- * expired or already consumed. Returns the plaintext of the fresh code, or
- * null when the current code is still valid (its plaintext is only
- * reconstructible from the .txt file).
+ * expired, already consumed, OR when the .txt is missing (the plaintext is
+ * unrecoverable even though a codeHash remains). Returns the plaintext of the
+ * fresh code, or null when the current code is still valid AND its plaintext
+ * is still readable from the .txt.
  */
 export async function ensurePairingCode(file = securityFile()) {
   return withStoreGuard(file, async () => {
     const store = await loadStore(file)
     const now = Date.now()
-    if (store.pairing && store.pairing.codeHash && store.pairing.expiresAt > now) {
+    if (store.pairing && store.pairing.codeHash && store.pairing.expiresAt > now && await pairingTxtUsable(file)) {
       return null
     }
-    const code = randomToken(16) // 128-bit, one-time, TTL-bounded
-    const plain = formatPairingCode(code)
-    store.pairing = { codeHash: sha256(code), expiresAt: now + PAIRING_TTL_MS }
-    await saveStore(file, store)
-    await writePairingTxt(freshTxt(pairingTxtFile(file), plain, new Date().toISOString()))
-    return plain
+    return writeFreshPairing(store, file, now)
+  })
+}
+
+/**
+ * FORCE rotation: always mints a new pairing code, even when the current code
+ * is still valid. This is what refresh_pairing.ps1's host watcher must call
+ * (ensurePairingCode returns null while the current code is valid, so a manual
+ * refresh would otherwise do nothing). Returns the fresh plaintext.
+ */
+export async function rotatePairingCode(file = securityFile()) {
+  return withStoreGuard(file, async () => {
+    const store = await loadStore(file)
+    return writeFreshPairing(store, file, Date.now())
   })
 }
 

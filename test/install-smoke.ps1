@@ -70,3 +70,34 @@ if ($install -notmatch '(?s)if \(\$tsName -match ''\\\.ts\\\.net\$''\) \{.*?http
     exit 1
 }
 Write-Host "install smoke: OK (phone URL guarded, no blank https://)"
+
+# 6) 65c52ca audit item 5: install.ps1 must resolve the dsh entry
+#    DETERMINISTICALLY (highest version across every npx cache entry, never
+#    the first arbitrary one), record the actual version into the launcher,
+#    and the launcher message must use the official package name.
+if ($install -notmatch 'Get-DshCandidates|Get-VersionKey') {
+    Write-Error "install.ps1 must compare dsh versions across all cache entries (deterministic resolution)"
+    exit 1
+}
+if ($install -notmatch '\$dshVersion' -or $install -notmatch '__DSHVERSION__') {
+    Write-Error "install.ps1 must record the resolved dsh version into start_harness.ps1 (__DSHVERSION__)"
+    exit 1
+}
+if ($install -match 'foreach \(\$c in \$candidates\).*break') {
+    Write-Error "install.ps1 must NOT stop at the first arbitrary dsh entry"
+    exit 1
+}
+$tpl = Get-Content (Join-Path $root "start_harness.template.ps1") -Raw
+if ($tpl -notmatch '__DSHVERSION__') {
+    Write-Error "start_harness.template.ps1 must declare a __DSHVERSION__ placeholder"
+    exit 1
+}
+if ($tpl -match 'npx dsh web') {
+    Write-Error "launcher message must use the official 'npx @deepseek-ai/dsh web' (found bare 'npx dsh web')"
+    exit 1
+}
+if ($tpl -notmatch 'npx @deepseek-ai/dsh web') {
+    Write-Error "launcher message must reference the official package '@deepseek-ai/dsh'"
+    exit 1
+}
+Write-Host "install smoke: OK (deterministic dsh version resolution, official package message)"

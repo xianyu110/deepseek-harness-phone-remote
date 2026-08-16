@@ -135,21 +135,64 @@ foreach ($f in @("tailscale_forward.js", "restart_harness.ps1", "stop_harness.ps
 
 $template = Join-Path $src "start_harness.template.ps1"
 if (Test-Path $template) {
-    # Locate the dsh entry under the npx cache (the _npx hash dir changes per install).
+    # Resolve the dsh entry DETERMINISTICALLY: several stale npx cache entries
+    # can exist, so we NEVER pick the first arbitrary one. Every candidate's
+    # package.json version is compared and the HIGHEST is chosen (verified to
+    # actually contain lib\bin.js). The resolved version is recorded so the
+    # user sees exactly which dsh build the launcher runs.
+    function Get-DshCandidates {
+        $list = @()
+        $cacheRoots = @(
+            (Join-Path $env:LOCALAPPDATA "npm-cache\_npx"),
+            (Join-Path $env:APPDATA "npm-cache\_npx")
+        )
+        foreach ($cacheRoot in $cacheRoots) {
+            $dirs = Get-ChildItem $cacheRoot -Directory -ErrorAction SilentlyContinue
+            foreach ($c in $dirs) {
+                $pkg = Join-Path $c.FullName "node_modules\@deepseek-ai\dsh\package.json"
+                $bin = Join-Path $c.FullName "node_modules\@deepseek-ai\dsh\lib\bin.js"
+                if ((Test-Path $pkg) -and (Test-Path $bin)) {
+                    try {
+                        $pj = Get-Content $pkg -Raw | ConvertFrom-Json
+                        $list += [pscustomobject]@{ Version = [string]$pj.version; Bin = $bin }
+                    } catch { }
+                }
+            }
+        }
+        return $list
+    }
+    function Get-VersionKey([string]$v) {
+        # "0.1.0-rc.6" -> "00000001.00000000.00000000.99999999.00000006" so that
+        # prereleases sort below the final release of the same major.minor.patch.
+        $m = [regex]::Match($v, '^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$')
+        if (-not $m.Success) { return '0.0.0.0.0' }
+        $core = $m.Groups[1].Value + '.' + $m.Groups[2].Value + '.' + $m.Groups[3].Value
+        if (-not $m.Groups[4].Success) { return $core + '.99999999.0' }
+        $pre = $m.Groups[4].Value
+        $preNum = 0
+        $pn = [regex]::Match($pre, '(\d+)$')
+        if ($pn.Success) { $preNum = [int]$pn.Groups[1].Value }
+        return $core + '.0.' + $preNum.ToString('D8')
+    }
     $dshBin = ""
-    $candidates = Get-ChildItem (Join-Path $env:LOCALAPPDATA "npm-cache\_npx") -Directory -ErrorAction SilentlyContinue
-    foreach ($c in $candidates) {
-        $probe = Join-Path $c.FullName "node_modules\@deepseek-ai\dsh\lib\bin.js"
-        if (Test-Path $probe) { $dshBin = $probe; break }
+    $dshVersion = ""
+    $cands = Get-DshCandidates
+    if ($cands.Count -gt 0) {
+        $best = $cands | Sort-Object -Property @{ Expression = { Get-VersionKey $_.Version } } -Descending | Select-Object -First 1
+        $dshBin = $best.Bin
+        $dshVersion = $best.Version
     }
     if (-not $dshBin) {
         Write-Host "[!] dsh entry not found under the npx cache; start_harness.ps1 will need a manual dshBin path." -ForegroundColor Yellow
+    } else {
+        Write-Host "[OK] dsh v$dshVersion resolved: $dshBin" -ForegroundColor Green
     }
 
     $content = Get-Content $template -Raw
     $content = $content -replace '__TSIP__', $tsIP
     $content = $content -replace '__WORKSPACE__', $ws
     $content = $content -replace '__DSHBIN__', $dshBin
+    $content = $content -replace '__DSHVERSION__', $dshVersion
     $tsNameValid = ($tsName -match '\.ts\.net$')
     if ($tsNameValid) {
         $content = $content -replace '__TSNAME__', $tsName
@@ -157,7 +200,7 @@ if (Test-Path $template) {
         $content = $content -replace ', "--trusted-host", "__TSNAME__"', ''
     }
     $content | Out-File -FilePath (Join-Path $scriptDir "start_harness.ps1") -Encoding ascii
-    Write-Host "[OK] start_harness.ps1 written to $scriptDir (trusted host: $tsIP)"
+    Write-Host "[OK] start_harness.ps1 written to $scriptDir (dsh v$dshVersion, trusted host: $tsIP)"
 } else {
     Write-Host "[!] template missing: $template" -ForegroundColor Yellow
 }

@@ -40,17 +40,41 @@ function Get-OwnedForwarderPid {
     return $null
 }
 
+# Returns EVERY owned forwarder PID (Tailscale IP + dynamic LAN IP) whose
+# command line contains the deployed forwarder bin path. Ownership is the
+# exact command-line identity, so a stale or foreign process that merely
+# occupies a port is never matched, and a LAN forwarder on an IP we do not
+# track statically is still found.
+function Get-OwnedForwarderPids {
+    param([string]$ForwarderBin)
+    $pids = @()
+    if (-not $ForwarderBin) { return $pids }
+    $procs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+    foreach ($proc in $procs) {
+        if ($proc.CommandLine -and $proc.CommandLine.Contains($ForwarderBin)) {
+            $pids += [int]$proc.ProcessId
+        }
+    }
+    return ($pids | Sort-Object -Unique)
+}
+
 # Kills ONLY processes this project owns (the harness matching $Marker and our
-# forwarders), then waits for the harness port to free up.
+# forwarders), then waits for the harness port to free up. Forwarders are
+# identified EITHER by an explicit bin path ($ForwarderBin - covers every
+# owned forwarder, Tailscale + LAN) OR by a static IP list ($ForwarderIPs).
 function Stop-OwnedHarnessStack {
-    param([string]$Marker, [string[]]$ForwarderIPs = @(), [int]$Port = 3080)
+    param([string]$Marker, [string[]]$ForwarderIPs = @(), [string]$ForwarderBin = "", [int]$Port = 3080)
     $mine = @()
     $hp = Get-OwnedHarnessPid -Port $Port -Marker $Marker
     if ($hp) { $mine += $hp }
-    foreach ($ip in $ForwarderIPs) {
-        if (-not $ip) { continue }
-        $fp = Get-OwnedForwarderPid -ListenIP $ip -Port $Port
-        if ($fp) { $mine += $fp }
+    if ($ForwarderBin) {
+        $mine += Get-OwnedForwarderPids -ForwarderBin $ForwarderBin
+    } else {
+        foreach ($ip in $ForwarderIPs) {
+            if (-not $ip) { continue }
+            $fp = Get-OwnedForwarderPid -ListenIP $ip -Port $Port
+            if ($fp) { $mine += $fp }
+        }
     }
     $mine | Sort-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
     for ($i = 0; $i -lt 40; $i++) {
