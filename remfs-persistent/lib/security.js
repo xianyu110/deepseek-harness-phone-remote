@@ -175,7 +175,7 @@ export async function ensurePairingCode(file = securityFile()) {
   await saveStore(file, store)
   try {
     await mkdir(path.dirname(file), { recursive: true })
-    await writeFile(file + '.txt', plain + '\n' + new Date().toISOString() + '\n', 'utf8')
+    await writeFile(path.join(path.dirname(file), 'remfs-pairing.txt'), plain + '\n' + new Date().toISOString() + '\n', 'utf8')
   } catch { /* display is best-effort */ }
   return plain
 }

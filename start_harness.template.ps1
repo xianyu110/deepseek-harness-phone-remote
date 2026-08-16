@@ -30,6 +30,24 @@ function Test-ForwardListening {
     return ($null -ne $conn)
 }
 
+# Walk-on-LAN: when the phone is on the same Wi-Fi it can bypass Tailscale and
+# connect straight to the PC's LAN IP. Detected fresh on every launch because
+# DHCP addresses change. Excludes loopback, APIPA, and the Tailscale CGNAT range.
+function Get-LanIPv4 {
+    $cands = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+        $_.IPAddress -ne "127.0.0.1" -and
+        $_.IPAddress -notlike "169.254.*" -and
+        $_.IPAddress -notlike "100.*" -and
+        $_.PrefixOrigin -ne "WellKnown"
+    }
+    foreach ($c in ($cands | Sort-Object InterfaceMetric)) {
+        $iface = Get-NetAdapter -InterfaceIndex $c.InterfaceIndex -ErrorAction SilentlyContinue
+        if ($iface -and $iface.Status -eq "Up") { return $c.IPAddress }
+    }
+    return ""
+}
+$lanIP = Get-LanIPv4
+
 if (-not (Test-Path $node)) {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show("Node.js not found: $node", "DeepSeek Harness")
@@ -51,10 +69,13 @@ if (-not (Test-HarnessListening)) {
     $errLog = Join-Path $logDir "harness_$stamp.err.log"
 
     # Remote access: phone reaches this GUI through the PC's Tailscale IP
-    # (plain HTTP via the TCP forwarder) and through the tailnet HTTPS name
-    # (via tailscale serve). Both must pass the /api browser-trust fence.
+    # (plain HTTP via the TCP forwarder), the tailnet HTTPS name (via tailscale
+    # serve), and the LAN IP (walk-on-LAN, same Wi-Fi). All must pass the /api
+    # browser-trust fence.
+    $trusted = @("--port", "3080", "--trusted-host", "__TSIP__", "--trusted-host", "__TSNAME__")
+    if ($lanIP) { $trusted += @("--trusted-host", $lanIP) }
     $proc = Start-Process -FilePath $node `
-        -ArgumentList @($dshBin, "web", "--port", "3080", "--trusted-host", "__TSIP__", "--trusted-host", "__TSNAME__") `
+        -ArgumentList @($dshBin, "web") + $trusted `
         -WorkingDirectory $workspace `
         -WindowStyle Hidden `
         -RedirectStandardOutput $outLog `
@@ -83,6 +104,22 @@ if ($ready -and (Test-Path $forwardBin) -and -not (Test-ForwardListening)) {
     Start-Sleep -Seconds 1
 }
 
+# Walk-on-LAN forwarder: same-Wi-Fi access without Tailscale.
+if ($ready -and $lanIP -and (Test-Path $forwardBin)) {
+    $lanListening = Get-NetTCPConnection -LocalAddress $lanIP -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
+    if (-not $lanListening) {
+        $fOut = Join-Path $logDir "forward_lan_$stamp.out.log"
+        $fErr = Join-Path $logDir "forward_lan_$stamp.err.log"
+        Start-Process -FilePath $node `
+            -ArgumentList @($forwardBin, $lanIP, "3080", "3080") `
+            -WorkingDirectory $workspace `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $fOut `
+            -RedirectStandardError $fErr | Out-Null
+        Start-Sleep -Seconds 1
+    }
+}
+
 # Keep the system awake while the harness runs (no admin, no power-plan change).
 $keepAwakeBin = Join-Path $PSScriptRoot "keep_awake.ps1"
 $keepAwakePid = Join-Path $env:TEMP "dsh_keep_awake.pid"
@@ -105,6 +142,10 @@ if ($ready -and -not $keepAwakeAlive -and (Test-Path $keepAwakeBin)) {
 }
 
 Start-Process $url
+
+if ($lanIP) {
+    Write-Host "Walk-on-LAN (same Wi-Fi): http://$lanIP`:3080"
+}
 
 if (-not $ready) {
     Add-Type -AssemblyName System.Windows.Forms
